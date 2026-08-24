@@ -15,12 +15,16 @@ namespace SmokePing.Net.Probes;
 public sealed class DnsProbe : ProbeBase
 {
     public const int DefaultPort = 53;
-    public const string DefaultQuery = "localhost";
+    /// <summary>
+    /// Upstream looks up the target host itself when no query is configured. A fixed
+    /// default would quietly measure a lookup of something else entirely.
+    /// </summary>
+    public static string DefaultQuery(MeasuredTarget target) => target.Host;
 
     public override string Name => "dns";
 
     public override string Describe(MeasuredTarget target) =>
-        $"{target.Pings} DNS lookups of {target.Query ?? DefaultQuery} against " +
+        $"{target.Pings} DNS lookups of {target.Query ?? DefaultQuery(target)} against " +
         $"{target.Host}:{target.Port ?? DefaultPort} every {target.StepSeconds}s";
 
     protected override async Task<double?> MeasureOnceAsync(MeasuredTarget target, CancellationToken cancellationToken)
@@ -34,7 +38,7 @@ public sealed class DnsProbe : ProbeBase
         // A fresh transaction id per probe stops a reply to an earlier, timed out
         // query from being mistaken for the answer to this one.
         var transactionId = (ushort)Random.Shared.Next(1, ushort.MaxValue);
-        var query = BuildQuery(transactionId, target.Query ?? DefaultQuery);
+        var query = BuildQuery(transactionId, target.Query ?? DefaultQuery(target));
 
         using var socket = new Socket(endpoint.AddressFamily, SocketType.Dgram, ProtocolType.Udp);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);

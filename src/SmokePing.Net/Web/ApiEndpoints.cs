@@ -171,28 +171,46 @@ public static partial class ApiEndpoints
             var (from, to) = ResolveRange(range ?? "10h");
             var limit = Math.Clamp(entries ?? 5, 1, 50);
 
+            // Upstream's sorters rank on the single most recent round, so these do
+            // too: "Top Max" is the slowest probe of that round, not the highest
+            // median over the window.
             var rows = config.Targets.Select(target =>
             {
                 var database = store.GetOrOpen(target);
                 var archive = database.SelectArchive(to - from);
-                var statistics = GraphStatistics.Compute(database.Read(archive, from, to));
-                return new { target, statistics };
+                var samples = database.Read(archive, from, to);
+                var latest = samples.LastOrDefault(sample => sample.Sent > 0);
+                return new { target, statistics = GraphStatistics.Compute(samples), latest };
             })
-            .Where(row => row.statistics.HasData)
+            .Where(row => row.statistics.HasData && row.latest is not null)
             .ToList();
 
             object Chart(string title, IEnumerable<object> items) => new { title, items };
 
-            IEnumerable<object> Top(Func<GraphStatistics, double> value) => rows
-                .OrderByDescending(row => value(row.statistics))
+            IEnumerable<object> Top(Func<GraphStatistics, Storage.Sample, double> value) => rows
+                .OrderByDescending(row => value(row.statistics, row.latest!))
                 .Take(limit)
                 .Select(row => new
                 {
                     row.target.Id,
                     row.target.Title,
                     row.target.Host,
-                    value = value(row.statistics),
+                    value = value(row.statistics, row.latest!),
                 });
+
+            // The slowest probe of the latest round is the top stored quantile.
+            static double LatestMaximum(Storage.Sample sample)
+            {
+                for (var i = Storage.Sample.QuantileCount - 1; i >= 0; i--)
+                {
+                    if (!float.IsNaN(sample.Quantiles[i]))
+                    {
+                        return sample.Quantiles[i];
+                    }
+                }
+
+                return 0;
+            }
 
             return Results.Ok(new
             {
@@ -200,11 +218,11 @@ public static partial class ApiEndpoints
                 to,
                 charts = new[]
                 {
-                    Chart("Top Standard Deviation", Top(s => s.StandardDeviation)),
-                    Chart("Top Jitter", Top(s => s.Jitter)),
-                    Chart("Top Max Roundtrip Time", Top(s => s.MedianMaximum)),
-                    Chart("Top Packet Loss", Top(s => s.LossAverage)),
-                    Chart("Top Median Roundtrip Time", Top(s => s.MedianAverage)),
+                    Chart("Top Standard Deviation", Top((s, _) => s.StandardDeviation)),
+                    Chart("Top Jitter", Top((_, latest) => latest.JitterMilliseconds ?? 0)),
+                    Chart("Top Max Roundtrip Time", Top((_, latest) => LatestMaximum(latest))),
+                    Chart("Top Packet Loss", Top((_, latest) => latest.LossFraction * 100)),
+                    Chart("Top Median Roundtrip Time", Top((_, latest) => latest.Median ?? 0)),
                 },
             });
         });

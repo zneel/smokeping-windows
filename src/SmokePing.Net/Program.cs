@@ -66,6 +66,11 @@ public static class Program
                     Console.WriteLine($"  SKIPPED: {skipped}");
                 }
 
+                foreach (var warning in config.Warnings)
+                {
+                    Console.WriteLine($"  WARNING: {warning}");
+                }
+
                 // Resolving dynamic hosts here is the point of --check for them: it
                 // shows what %gateway% actually found on this machine.
                 // Silent: --check prints its own findings, in order.
@@ -157,6 +162,11 @@ public static class Program
         foreach (var skipped in config.SkippedTargets)
         {
             logger.LogWarning("Skipped target: {Reason}", skipped);
+        }
+
+        foreach (var warning in config.Warnings)
+        {
+            logger.LogWarning("{Warning}", warning);
         }
 
         logger.LogInformation(

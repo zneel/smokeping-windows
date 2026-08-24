@@ -26,6 +26,9 @@ public sealed class LoadedConfiguration
     /// <summary>Targets that were dropped because this implementation cannot measure them.</summary>
     public IReadOnlyList<string> SkippedTargets { get; init; } = [];
 
+    /// <summary>Configurations that will work but probably do not do what was meant.</summary>
+    public IReadOnlyList<string> Warnings { get; init; } = [];
+
     private Dictionary<string, MeasuredTarget>? _byId;
 
     public bool TryGetTarget(string id, out MeasuredTarget target)
@@ -75,9 +78,22 @@ public static class ConfigLoader
         Step = 300,
         Pings = 20,
         PingIntervalMs = 500,
-        TimeoutMs = 1500,
         PacketSize = 56,
         AlertRules = [],
+    };
+
+    /// <summary>
+    /// Per-probe timeouts, applied when nothing in the configuration sets one. A single
+    /// figure across all probes is wrong in both directions: upstream gives DNS five
+    /// seconds and an HTTP fetch ten, and a shared 1.5s would report loss on sites that
+    /// upstream measures perfectly well.
+    /// </summary>
+    private static int DefaultTimeoutMs(string probe) => probe.ToLowerInvariant() switch
+    {
+        "dns" => 5000,
+        "http" => 10000,
+        "tcp" => 5000,
+        _ => 1500,
     };
 
     public static LoadedConfiguration Load(string configFilePath, bool skipUnsupported = false)
@@ -141,10 +157,11 @@ public static class ConfigLoader
 
         var rootDefaults = Merge(BuiltInDefaults, raw.Defaults);
         var skipped = new List<string>();
+        var warnings = new List<string>();
 
         foreach (var node in raw.Targets)
         {
-            var walked = Walk(node, string.Empty, rootDefaults, targets, alerts, seenIds, skipUnsupported, skipped);
+            var walked = Walk(node, string.Empty, rootDefaults, targets, alerts, seenIds, skipUnsupported, skipped, warnings);
             if (walked is not null)
             {
                 menu.Add(walked);
@@ -170,6 +187,7 @@ public static class ConfigLoader
             DataDirectory = Path.GetFullPath(dataDirectory),
             ConfigFilePath = configFilePath,
             SkippedTargets = skipped,
+            Warnings = warnings,
         };
     }
 
@@ -221,7 +239,8 @@ public static class ConfigLoader
         IReadOnlyDictionary<string, CompiledAlertRule> alerts,
         HashSet<string> seenIds,
         bool skipUnsupported,
-        List<string> skipped)
+        List<string> skipped,
+        List<string> warnings)
     {
         if (string.IsNullOrWhiteSpace(node.Id))
         {
@@ -271,7 +290,7 @@ public static class ConfigLoader
         {
             try
             {
-                targets.Add(BuildTarget(id, title, parentId, node, settings, alerts));
+                targets.Add(BuildTarget(id, title, parentId, node, settings, alerts, warnings));
             }
             catch (ConfigurationException ex) when (skipUnsupported)
             {
@@ -282,7 +301,7 @@ public static class ConfigLoader
 
         foreach (var child in node.Children)
         {
-            var walked = Walk(child, id, settings, targets, alerts, seenIds, skipUnsupported, skipped);
+            var walked = Walk(child, id, settings, targets, alerts, seenIds, skipUnsupported, skipped, warnings);
             if (walked is not null)
             {
                 menuNode.Children.Add(walked);
@@ -356,11 +375,13 @@ public static class ConfigLoader
         string parentId,
         TargetNode node,
         TargetDefaults settings,
-        IReadOnlyDictionary<string, CompiledAlertRule> alerts)
+        IReadOnlyDictionary<string, CompiledAlertRule> alerts,
+        List<string> warnings)
     {
         var probe = settings.Probe!;
         var step = settings.Step!.Value;
         var pings = settings.Pings!.Value;
+        var timeoutMs = settings.TimeoutMs ?? DefaultTimeoutMs(probe);
 
         if (step < 10)
         {
@@ -374,7 +395,7 @@ public static class ConfigLoader
             throw new ConfigurationException($"Target '{id}': pings must be at least 3.");
         }
 
-        if (settings.TimeoutMs is < 1 or > 300_000)
+        if (timeoutMs is < 1 or > 300_000)
         {
             throw new ConfigurationException($"Target '{id}': timeoutMs must be between 1 and 300000.");
         }
@@ -394,13 +415,15 @@ public static class ConfigLoader
             throw new ConfigurationException($"Target '{id}': packetSize must be between 12 and 64000.");
         }
 
-        // The whole round has to fit inside one step, otherwise rounds would overlap.
-        var roundDuration = (long)(pings - 1) * settings.PingIntervalMs!.Value + settings.TimeoutMs!.Value;
+        // A round that overruns its step is not fatal - the next round simply starts at
+        // the following boundary and some are skipped - and upstream allows it, so this
+        // is a warning rather than a refusal.
+        var roundDuration = (long)(pings - 1) * settings.PingIntervalMs!.Value + timeoutMs;
         if (roundDuration > step * 1000L)
         {
-            throw new ConfigurationException(
-                $"Target '{id}': {pings} pings at {settings.PingIntervalMs}ms plus a {settings.TimeoutMs}ms " +
-                $"timeout can take {roundDuration / 1000.0:F0}s, which does not fit in the {step}s step.");
+            warnings.Add(
+                $"Target '{id}': {pings} pings at {settings.PingIntervalMs}ms plus a {timeoutMs}ms timeout " +
+                $"can take {roundDuration / 1000.0:F0}s, longer than the {step}s step, so rounds will be skipped.");
         }
 
         var ruleNames = settings.AlertRules ?? [];
@@ -437,7 +460,7 @@ public static class ConfigLoader
             StepSeconds = step,
             Pings = pings,
             PingIntervalMs = settings.PingIntervalMs!.Value,
-            TimeoutMs = settings.TimeoutMs!.Value,
+            TimeoutMs = timeoutMs,
             Port = settings.Port,
             Query = settings.Query,
             Url = settings.Url,

@@ -109,7 +109,10 @@ the distribution either way, but the files are not RRD files and cannot be read 
 `rrdtool` — and eleven quantiles is a lossy summary of twenty pings, so an individual
 probe's exact time is not recoverable.
 
-**Probes.** Four built in (`icmp`, `tcp`, `dns`, `http`) against upstream's fifty-odd.
+**Probes.** Four built in (`icmp`, `tcp`, `dns`, `http`) against upstream's fifty-odd,
+with upstream's own default timeouts per probe, its send-to-send probe spacing, its
+`%host%` substitution in a URL, its DNS query defaulting to the target host, and its
+treatment of a non-2xx HTTP response as a measurement rather than as loss.
 ICMP uses the Windows IP Helper API rather than `fping`, so it needs no external
 binary and no administrator rights. There is no plugin mechanism.
 
@@ -134,9 +137,10 @@ no access to that state. `Median`, `Medratio` and `Avgratio` compare windows aga
 each other, and `ExpLoss` keeps an exponentially weighted average. None of these can
 be written as a detector pattern.
 
-**Top-N charts.** Upstream ranks on the single most recent round — its `StdDev` sorter
-is the deviation across that round's twenty probes. These rank over a ten hour window
-instead, on the per-round medians. The chart titles match; the quantities do not.
+**Top-N charts.** Max, loss, median and jitter rank on the single most recent round,
+as upstream's sorters do. Standard deviation is the exception: upstream's is the
+deviation across that round's individual probes, which the stored quantiles cannot
+reconstruct, so it is the deviation of the per-round medians over the window instead.
 
 **Configurations that are rejected here.** A host of `DYNAMIC`, a multi-host list of
 `/target/paths`, or a `~slave` suffix is refused at load time rather than measured and

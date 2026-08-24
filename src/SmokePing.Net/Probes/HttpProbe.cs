@@ -50,7 +50,11 @@ public sealed class HttpProbe : ProbeBase
             await response.Content.CopyToAsync(Stream.Null, timeout.Token).ConfigureAwait(false);
             stopwatch.Stop();
 
-            return response.IsSuccessStatusCode ? stopwatch.Elapsed.TotalMilliseconds : null;
+            // A 404 or a 500 is a server answering, and answering is what is being
+            // timed. Upstream counts it as a measurement too - curl exits zero and its
+            // require_zero_status defaults to off - so treating it as loss here would
+            // show a permanently dead target that upstream graphs perfectly normally.
+            return stopwatch.Elapsed.TotalMilliseconds;
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -58,7 +62,13 @@ public sealed class HttpProbe : ProbeBase
         }
     }
 
-    /// <summary>Uses an explicit URL when configured, otherwise builds one from the host.</summary>
+    /// <summary>
+    /// Uses an explicit URL when configured, otherwise builds one from the host.
+    /// <c>%host%</c> is substituted as upstream's urlformat does, so one URL set on a
+    /// folder can serve every target below it.
+    /// </summary>
     private static string ResolveUrl(MeasuredTarget target) =>
-        !string.IsNullOrWhiteSpace(target.Url) ? target.Url : $"http://{target.Host}/";
+        string.IsNullOrWhiteSpace(target.Url)
+            ? $"http://{target.Host}/"
+            : target.Url.Replace("%host%", target.Host, StringComparison.OrdinalIgnoreCase);
 }

@@ -20,11 +20,19 @@ public abstract class ProbeBase : IProbe
         ArgumentNullException.ThrowIfNull(target);
 
         var results = new double?[target.Pings];
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
         for (var i = 0; i < target.Pings; i++)
         {
-            if (i > 0 && target.PingIntervalMs > 0)
+            // The interval is measured send to send, as upstream's fping and DNS
+            // probes both do. Sleeping after each measurement instead would stretch
+            // every round by the round-trip time, and on a slow link a round would
+            // quietly grow past its step.
+            var due = TimeSpan.FromMilliseconds((long)i * target.PingIntervalMs);
+            var wait = due - stopwatch.Elapsed;
+            if (wait > TimeSpan.Zero)
             {
-                await Task.Delay(target.PingIntervalMs, cancellationToken).ConfigureAwait(false);
+                await Task.Delay(wait, cancellationToken).ConfigureAwait(false);
             }
 
             cancellationToken.ThrowIfCancellationRequested();

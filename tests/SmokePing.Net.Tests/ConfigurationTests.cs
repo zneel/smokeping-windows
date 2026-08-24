@@ -98,18 +98,53 @@ public static class ConfigurationTests
                 "a node with neither host nor children measures nothing");
         });
 
-        runner.Add("ConfigLoader: a round that cannot fit inside its step is rejected", () =>
+        runner.Add("ConfigLoader: a round longer than its step is warned about, not refused", () =>
         {
             var config = Minimal();
             config.Defaults.Step = 60;
             config.Defaults.Pings = 20;
             config.Defaults.PingIntervalMs = 5000;
 
-            var error = Assert.Throws<ConfigurationException>(
-                () => ConfigLoader.Build(config, "/etc/smokeping.json"),
-                "20 pings 5 seconds apart cannot fit in a 60 second step");
+            // Upstream allows this - the round simply overruns and the next one starts
+            // at the following boundary - so refusing to start would reject a working
+            // configuration carried over from an existing installation.
+            var loaded = ConfigLoader.Build(config, "/etc/smokeping.json");
 
-            Assert.Contains(error.Message, "does not fit", "the message explains the arithmetic");
+            Assert.Equal(1, loaded.Warnings.Count, "the configuration loads with a warning");
+            Assert.Contains(loaded.Warnings[0], "rounds will be skipped", "which says what will happen");
+        });
+
+        runner.Add("ConfigLoader: probes get upstream's own default timeouts", () =>
+        {
+            MeasuredTarget WithProbe(string probe, string? url = null)
+            {
+                var config = Minimal();
+                config.Defaults.Probe = probe;
+                config.Defaults.Url = url;
+                config.Defaults.Query = probe == "dns" ? "example.com" : null;
+                config.Defaults.Port = probe == "tcp" ? 443 : null;
+                return ConfigLoader.Build(config, "/etc/smokeping.json").Targets.Single();
+            }
+
+            // A single figure across all probes is wrong in both directions: upstream
+            // gives DNS five seconds and an HTTP fetch ten.
+            Assert.Equal(1500, WithProbe("icmp").TimeoutMs, "ICMP");
+            Assert.Equal(5000, WithProbe("dns").TimeoutMs, "DNS, as AnotherDNS defaults it");
+            Assert.Equal(10000, WithProbe("http", "http://example.com/").TimeoutMs, "HTTP, as Curl defaults it");
+            Assert.Equal(5000, WithProbe("tcp").TimeoutMs, "TCP");
+        });
+
+        runner.Add("ConfigLoader: an explicit timeout still wins", () =>
+        {
+            var config = Minimal();
+            config.Defaults.Probe = "http";
+            config.Defaults.Url = "http://example.com/";
+            config.Defaults.TimeoutMs = 2500;
+
+            Assert.Equal(
+                2500,
+                ConfigLoader.Build(config, "/etc/smokeping.json").Targets.Single().TimeoutMs,
+                "the configured value is not overridden by the probe default");
         });
 
         runner.Add("ConfigLoader: a target cannot reference an undefined alert", () =>
