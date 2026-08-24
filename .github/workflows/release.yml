@@ -32,6 +32,11 @@ jobs:
           echo "number=${TAG#v}" >> "$GITHUB_OUTPUT"
 
       # Nothing ships without the tests passing.
+      # rrdtool is the oracle for the RRD compatibility tests; without it those
+      # tests skip themselves, and a release should not skip them.
+      - name: Install rrdtool
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq rrdtool
+
       - name: Run tests
         run: dotnet run --project tests/SmokePing.Net.Tests --configuration Release
 
@@ -78,6 +83,10 @@ jobs:
           cat > notes.md <<'NOTES'
           SmokePing.NET — latency measurement and smoke graphs for Windows, in C# on .NET 10.
 
+          A port of [SmokePing](https://oss.oetiker.ch/smokeping/), which has no Windows build of
+          its own. It reads SmokePing's own configuration file and can read and write real RRDtool
+          files, so an existing installation's config and data work in place.
+
           ### Portable binaries
 
           Each archive is a single self-contained executable: **no .NET runtime needed**,
@@ -89,6 +98,18 @@ jobs:
           ```
 
           Then open http://localhost:8081.
+
+          ### Coming from an existing SmokePing
+
+          Point it at the configuration you already have — `*** Targets ***`, `+`/`++` hierarchy,
+          `@include` and all — and add `--listen` for the web interface:
+
+          ```
+          SmokePing.Net.exe --config C:\smokeping\etc\config --listen http://localhost:8081 --check
+          ```
+
+          Set `"database": { "format": "rrd" }` to keep using RRDtool files. Everything this
+          writes stays readable by `rrdtool`, and its files are read in place.
 
           To run it as a Windows service, from an elevated PowerShell prompt:
 
