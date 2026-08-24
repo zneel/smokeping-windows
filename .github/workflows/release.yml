@@ -36,7 +36,7 @@ jobs:
         run: dotnet run --project tests/SmokePing.Net.Tests --configuration Release
 
       - name: Validate the sample configuration
-        run: dotnet run --project src/SmokePing.Net --configuration Release -- --config config/smokeping.json --check
+        run: dotnet run --project src/SmokePing.Net --configuration Release -- --config "$PWD/config/smokeping.json" --check
 
       # Self-contained single-file builds: a portable binary that runs on a machine
       # with no .NET installed at all.

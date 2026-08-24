@@ -170,6 +170,44 @@ public static class ConfigurationTests
             Assert.Contains(error.Message, "does not exist", "the message says what is wrong");
         });
 
+        runner.Add("CommandLineOptions: a relative config is found from a subdirectory", () =>
+        {
+            // "dotnet run" starts the process in the project directory, and a service
+            // starts in the system directory; neither resolves a repository-relative
+            // path on its own, so the search climbs towards the root.
+            using var directory = new TempDirectory();
+            var configDirectory = Path.Combine(directory.Path, "config");
+            Directory.CreateDirectory(configDirectory);
+            File.WriteAllText(Path.Combine(configDirectory, "smokeping.json"), "{}");
+
+            var deep = Path.Combine(directory.Path, "src", "app", "bin");
+            Directory.CreateDirectory(deep);
+
+            var previous = Directory.GetCurrentDirectory();
+            try
+            {
+                Directory.SetCurrentDirectory(deep);
+                var options = CommandLineOptions.Parse(["--config", Path.Combine("config", "smokeping.json")]);
+
+                Assert.Equal(
+                    Path.Combine(configDirectory, "smokeping.json"),
+                    options.ConfigPath,
+                    "the configuration is found further up the tree");
+            }
+            finally
+            {
+                Directory.SetCurrentDirectory(previous);
+            }
+        });
+
+        runner.Add("CommandLineOptions: an absolute config path is taken as given", () =>
+        {
+            var absolute = Path.Combine(Path.GetTempPath(), "smokeping-absolute.json");
+            var options = CommandLineOptions.Parse(["--config", absolute]);
+
+            Assert.Equal(absolute, options.ConfigPath, "an absolute path is never searched for");
+        });
+
         runner.Add("ConfigLoader: the shipped sample configuration is valid", () =>
         {
             var path = FindSampleConfig();

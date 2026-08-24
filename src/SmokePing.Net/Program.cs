@@ -32,6 +32,16 @@ public static class Program
         catch (ConfigurationException ex)
         {
             Console.Error.WriteLine($"Configuration error: {ex.Message}");
+
+            if (!File.Exists(options.ConfigPath) && options.SearchedConfigPaths.Count > 1)
+            {
+                Console.Error.WriteLine("Looked in:");
+                foreach (var candidate in options.SearchedConfigPaths)
+                {
+                    Console.Error.WriteLine($"  {candidate}");
+                }
+            }
+
             return 1;
         }
 
@@ -190,6 +200,9 @@ public sealed class CommandLineOptions
 
     public string ConfigPath { get; private init; } = Path.Combine("config", "smokeping.json");
 
+    /// <summary>Every location the configuration was looked for, for the error message.</summary>
+    public IReadOnlyList<string> SearchedConfigPaths { get; private init; } = [];
+
     public bool CheckOnly { get; private init; }
 
     public bool NoPolling { get; private init; }
@@ -264,37 +277,61 @@ public sealed class CommandLineOptions
             }
         }
 
+        var resolvedConfig = ResolveExistingFile(configPath, out var searched);
+
         return new CommandLineOptions
         {
-            ConfigPath = ResolvePath(configPath),
+            ConfigPath = resolvedConfig,
+            SearchedConfigPaths = searched,
             CheckOnly = checkOnly,
             NoPolling = noPolling,
             ShowHelp = showHelp,
             RunAsService = runAsService,
             ServiceName = serviceName,
-            LogFile = logFile is null ? null : ResolvePath(logFile),
+
+            // A log file need not exist yet, so it is not searched for.
+            LogFile = logFile is null ? null : Path.GetFullPath(logFile),
         };
     }
 
     /// <summary>
-    /// Resolves a relative path against the working directory, falling back to the
-    /// directory the executable lives in. The service control manager starts
-    /// processes in the system directory, where a relative path would never resolve.
+    /// Resolves a path that is expected to exist already.
+    ///
+    /// A relative path is tried against the working directory and the directory
+    /// holding the executable, and then against their parents. Both fallbacks earn
+    /// their keep: the service control manager starts processes in the system
+    /// directory, and "dotnet run" starts them in the project directory - in neither
+    /// case does a path relative to the repository root resolve on its own.
+    ///
+    /// Returns the working-directory interpretation when nothing is found, so the
+    /// error names the path the user actually typed.
     /// </summary>
-    private static string ResolvePath(string path)
+    private static string ResolveExistingFile(string path, out IReadOnlyList<string> searched)
     {
         if (Path.IsPathRooted(path))
         {
+            searched = [path];
             return path;
         }
 
-        var fromWorkingDirectory = Path.GetFullPath(path);
-        if (File.Exists(fromWorkingDirectory))
+        var candidates = new List<string>();
+
+        foreach (var root in new[] { Directory.GetCurrentDirectory(), AppContext.BaseDirectory })
         {
-            return fromWorkingDirectory;
+            var directory = new DirectoryInfo(root);
+
+            // Far enough to climb out of bin/<configuration>/<framework>.
+            for (var depth = 0; depth < 5 && directory is not null; depth++, directory = directory.Parent)
+            {
+                var candidate = Path.GetFullPath(Path.Combine(directory.FullName, path));
+                if (!candidates.Contains(candidate, StringComparer.Ordinal))
+                {
+                    candidates.Add(candidate);
+                }
+            }
         }
 
-        var fromBaseDirectory = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, path));
-        return File.Exists(fromBaseDirectory) ? fromBaseDirectory : fromWorkingDirectory;
+        searched = candidates;
+        return candidates.FirstOrDefault(File.Exists) ?? candidates[0];
     }
 }

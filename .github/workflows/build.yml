@@ -24,7 +24,7 @@ jobs:
         run: dotnet run --project tests/SmokePing.Net.Tests --configuration Release --no-build
 
       - name: Validate the sample configuration
-        run: dotnet run --project src/SmokePing.Net --configuration Release --no-build -- --config config/smokeping.json --check
+        run: dotnet run --project src/SmokePing.Net --configuration Release --no-build -- --config "$PWD/config/smokeping.json" --check
 
   # The daemon targets Windows first, so it is also built and tested there.
   windows:
