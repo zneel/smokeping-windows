@@ -121,6 +121,11 @@ reference.
 }
 ```
 
+Hosts can be dynamic: `"host": "%gateway%"` measures whatever the default gateway
+currently is, and `"%dns%"` the machine's first DNS server. Both are re-read
+periodically, so a laptop that changes network keeps measuring the right thing, and
+neither needs administrator rights. `--check` shows what they resolved to.
+
 Targets form a tree. A node with a `host` is measured; a node without one is just a
 menu folder. Settings are inherited down the tree, so `step`, `pings` or a probe type
 can be set once on a folder and apply to everything below it.
@@ -161,18 +166,19 @@ out of the alert state; set `"edgeTrigger": false` to be told every round instea
 ## Storage
 
 Each target gets one fixed-size `.spd` file that never grows. It holds the same
-resolution tiers upstream's RRD files do:
+resolution tiers upstream's default RRA table does, so retention matches an existing
+SmokePing installation:
 
 | Resolution     | Retention |
 | -------------- | --------- |
 | 5 minutes      | 100 days  |
 | 1 hour         | 400 days  |
-| 12 hours       | 3.9 years |
+| 12 hours       | 1200 days |
 
 Rather than storing each individual ping, every round is reduced to eleven quantiles
 (0%, 10% … 100%) plus the sent and lost counts. That is enough to redraw the smoke
 exactly, keeps every record the same 60 bytes, and subsumes the separate MIN/MAX/AVERAGE
-archives RRDtool needs — about 2.4 MB per target, forever.
+archives RRDtool needs — about 2.5 MB per target, forever.
 
 Coarse tiers are recomputed from the full-resolution tier on every write, so a missed
 poll or an unclean shutdown can never leave a bucket permanently wrong.

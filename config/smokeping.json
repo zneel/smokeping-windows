@@ -48,15 +48,18 @@
       "title": "Local Network",
       "children": [
         {
+          // %gateway% is resolved from the routing table at measurement time, so this
+          // configuration works on any network without being edited.
           "id": "gateway",
           "title": "Default Gateway",
-          "host": "192.168.1.1",
+          "host": "%gateway%",
           "description": "The router everything else goes through."
         },
         {
+          // %dns% is the first DNS server this machine is configured with.
           "id": "dns",
-          "title": "Router DNS",
-          "host": "192.168.1.1",
+          "title": "Local DNS Server",
+          "host": "%dns%",
           "probe": "dns",
           "query": "www.example.com",
           "alertRules": ["hostdown"]

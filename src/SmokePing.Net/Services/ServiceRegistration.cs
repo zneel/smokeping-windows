@@ -28,6 +28,7 @@ public static class ServiceRegistration
         services.AddSingleton(new DataStore(config.DataDirectory));
         services.AddSingleton(new AlertEngine(config.Alerts));
         services.AddSingleton<AlertNotifier>();
+        services.AddSingleton<HostResolver>();
 
         // Named clients rather than AddHttpClient<T>, which would re-register the
         // service type itself as transient and undo the singletons above. Separate

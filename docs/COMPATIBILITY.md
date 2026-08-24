@@ -14,7 +14,7 @@ median, a loss count and the distribution of the individual probes. Defaults are
 upstream's: 20 pings every 300 seconds, 56-byte ICMP payload.
 
 **Retention.** The archive tiers mirror upstream's default RRA table: full resolution
-for 100 days, hourly for 400 days, twelve-hourly for 3.9 years.
+for 100 days, hourly for 400 days, twelve-hourly for 1200 days.
 
 **Smoke shading.** The nested bands and their grey ramp use upstream's formula,
 `int(190 / half × (half − i)) + 50`, so the outer, rarer values are lightest and the
@@ -60,6 +60,9 @@ a jitter chart this adds.
 **Jitter.** Each round records the mean absolute variation between consecutive
 probes, which upstream does not measure. It is stored at measurement time because the
 quantiles cannot reconstruct probe order.
+
+**Dynamic hosts.** `%gateway%` and `%dns%` resolve at measurement time. Upstream has
+no equivalent; a gateway address has to be written into the configuration by hand.
 
 **Loss background on by default.** Upstream has this as `loss_background`, off by
 default; here rounds that lost probes are shaded unless the graph asks otherwise.

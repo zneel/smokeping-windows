@@ -267,6 +267,14 @@ public static class ConfigLoader
             }
         }
 
+        if (Probes.HostResolver.IsToken(node.Host!) &&
+            probe.Equals("http", StringComparison.OrdinalIgnoreCase) &&
+            string.IsNullOrWhiteSpace(settings.Url))
+        {
+            throw new ConfigurationException(
+                $"Target '{id}': the http probe cannot build a URL from '{node.Host}'. Set url explicitly.");
+        }
+
         if (probe.Equals("http", StringComparison.OrdinalIgnoreCase) &&
             !string.IsNullOrWhiteSpace(settings.Url) &&
             !Uri.TryCreate(settings.Url, UriKind.Absolute, out _))

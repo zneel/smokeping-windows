@@ -45,6 +45,42 @@ The order of precedence is: the node itself, then each ancestor in turn, then
 | `url` | *(from host)* | URL the HTTP probe fetches |
 | `alertRules` | `[]` | Names of the alert rules applied |
 
+### Why 300 seconds
+
+`step` defaults to 300 because that is SmokePing's own default, and it is SmokePing's
+default because RRDtool and MRTG — same author — settled on a five minute sample as
+the unit of network graphing. Everything else follows from it: the archive tiers are
+multiples of the step, so a five minute step is what gives 100 days of full
+resolution history in 2.5 MB.
+
+It is not sacred. `step` is inheritable like any other setting, so it can be changed
+globally or for one target:
+
+```jsonc
+"defaults": { "step": 300 },
+"targets": [
+  { "id": "gateway", "host": "192.168.1.1", "step": 60, "pings": 10, "pingIntervalMs": 1000 }
+]
+```
+
+What changes when you lower it:
+
+| Step | Full-resolution history | Database per target | Probes per hour |
+| --- | --- | --- | --- |
+| 60s | 20 days | 2.5 MB | 1200 |
+| 300s (default) | 100 days | 2.5 MB | 240 |
+| 900s | 300 days | 2.5 MB | 80 |
+
+The file size does not change, because the archives hold a fixed number of slots — a
+shorter step buys resolution and spends history. A 60 second step keeps only 20 days
+before the full-resolution tier wraps.
+
+Note that a round is a burst, not a spread: 20 pings 500ms apart occupy ten seconds of
+each five minute step and the target is left alone for the rest. That is what upstream
+does too. If you want a wider sample, raise `pingIntervalMs` rather than `pings` —
+`pings` is what the loss percentage is quantised to, and 20 gives the 5% granularity
+the loss colour scale is built around.
+
 A whole round must fit inside one step, or rounds would overlap. The check is
 `(pings - 1) × pingIntervalMs + timeoutMs ≤ step × 1000`, and a configuration that
 fails it is rejected at start-up with the arithmetic spelled out.
@@ -70,6 +106,43 @@ A tree of nodes:
 Ids are joined with slashes to form the path used in URLs and on disk, so the node
 above containing a child `cloudflare` yields `internet/cloudflare`. A node needs
 either a `host` or children — one with neither measures nothing and is rejected.
+
+### Dynamic hosts
+
+Hard-coding a gateway address makes a configuration wrong on every network but the one
+it was written for. Two tokens are resolved at measurement time instead:
+
+| Token | Resolves to |
+| --- | --- |
+| `%gateway%` | The default gateway of the active interface |
+| `%dns%` | The first DNS server the machine is configured with |
+
+```jsonc
+{ "id": "gateway", "title": "Default Gateway", "host": "%gateway%" }
+{ "id": "dns", "title": "Local DNS", "host": "%dns%", "probe": "dns", "query": "www.example.com" }
+```
+
+Resolution reads the operating system's routing and DNS configuration and needs **no
+administrator rights**. It is redone about once a minute rather than once at start-up,
+so a laptop that moves to another network starts measuring the new gateway without a
+restart — and the graph title follows it.
+
+`--check` prints what each token resolved to on this machine, which is the quickest
+way to confirm detection worked:
+
+```
+- local/gateway -> %gateway% -> 192.168.1.254 (icmp, 20 pings / 300s)
+- local/dns     -> %dns%     -> 192.168.1.254 (dns, 20 pings / 300s)
+```
+
+Addresses that mean "no gateway" are skipped: the all-zeroes placeholder some drivers
+report, and IPv4 link-local (`169.254.x.x`), which means DHCP failed rather than that
+a gateway was found. IPv4 is preferred over IPv6 when both exist. If a token cannot be
+resolved, that round is recorded as lost and a warning is logged — the target keeps
+trying rather than the daemon giving up.
+
+The `http` probe cannot build a URL from a token, so a target using one must set `url`
+explicitly. That is rejected at start-up rather than at the first round.
 
 ### Probe-specific settings
 

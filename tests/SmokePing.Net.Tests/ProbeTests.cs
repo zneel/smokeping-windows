@@ -11,6 +11,48 @@ public static class ProbeTests
 {
     public static void Register(TestRunner runner)
     {
+        runner.Add("HostResolver: a plain host is returned untouched", () =>
+        {
+            var resolver = NewResolver();
+
+            Assert.Equal("1.1.1.1", resolver.Resolve("1.1.1.1"), "an address is not a token");
+            Assert.Equal("example.com", resolver.Resolve("example.com"), "nor is a host name");
+            Assert.False(HostResolver.IsToken("example.com"), "and it is not reported as one");
+        });
+
+        runner.Add("HostResolver: the gateway token resolves to a real address", () =>
+        {
+            var resolved = NewResolver().Resolve(HostResolver.GatewayToken);
+
+            // A machine with no default route is possible, so only assert the shape
+            // when something was found.
+            if (resolved is null)
+            {
+                return;
+            }
+
+            Assert.True(IPAddress.TryParse(resolved, out _), $"'{resolved}' is a usable address");
+            Assert.False(resolved.StartsWith("169.254.", StringComparison.Ordinal), "a DHCP failure is not a gateway");
+            Assert.False(resolved is "0.0.0.0" or "::", "the all-zeroes placeholder is not a gateway");
+        });
+
+        runner.Add("HostResolver: tokens are recognised whatever the casing", () =>
+        {
+            Assert.True(HostResolver.IsToken("%gateway%"), "the gateway token");
+            Assert.True(HostResolver.IsToken("%GATEWAY%"), "in upper case too");
+            Assert.True(HostResolver.IsToken("%dns%"), "the dns token");
+            Assert.False(HostResolver.IsToken("%router%"), "an unknown token is not one of ours");
+        });
+
+        runner.Add("HostResolver: a resolved address is cached, not looked up per probe", () =>
+        {
+            var resolver = NewResolver();
+            var first = resolver.Resolve(HostResolver.GatewayToken);
+            var second = resolver.Resolve(HostResolver.GatewayToken);
+
+            Assert.Equal(first, second, "the same address comes back within the cache window");
+        });
+
         runner.Add("ProbeRegistry: probes resolve by their configuration name", () =>
         {
             using var httpClientFactory = new SimpleHttpClientFactory();
@@ -101,6 +143,10 @@ public static class ProbeTests
                 "the http probe names the url");
         });
     }
+
+    private static HostResolver NewResolver() => new(
+        Microsoft.Extensions.Logging.Abstractions.NullLogger<HostResolver>.Instance,
+        TimeProvider.System);
 
     private static MeasuredTarget Target(
         int pings = 1,

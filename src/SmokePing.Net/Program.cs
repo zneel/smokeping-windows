@@ -1,3 +1,4 @@
+using System.Net.Sockets;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
@@ -59,10 +60,26 @@ public static class Program
                 Console.WriteLine($"  targets:        {config.Targets.Count}");
                 Console.WriteLine($"  alerts:         {config.Alerts.Count}");
                 Console.WriteLine($"  data directory: {config.DataDirectory}");
+                // Resolving dynamic hosts here is the point of --check for them: it
+                // shows what %gateway% actually found on this machine.
+                // Silent: --check prints its own findings, in order.
+                var resolver = new HostResolver(
+                    Microsoft.Extensions.Logging.Abstractions.NullLogger<HostResolver>.Instance,
+                    TimeProvider.System);
+
                 foreach (var target in config.Targets)
                 {
+                    var host = target.Host;
+                    if (target.HasDynamicHost)
+                    {
+                        var resolved = resolver.Resolve(target.Host);
+                        host = resolved is null
+                            ? $"{target.Host} (COULD NOT BE RESOLVED)"
+                            : $"{target.Host} -> {resolved}";
+                    }
+
                     Console.WriteLine(
-                        $"  - {target.Id} -> {target.Host} " +
+                        $"  - {target.Id} -> {host} " +
                         $"({target.ProbeType}, {target.Pings} pings / {target.StepSeconds}s)");
                 }
 
@@ -136,7 +153,21 @@ public static class Program
 
         try
         {
-            await app.StartAsync(CancellationToken.None).ConfigureAwait(false);
+            try
+            {
+                await app.StartAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (IOException ex) when (FindSocketError(ex) is { } socketError)
+            {
+                // Almost always a second copy already running, or something else on
+                // the port. A stack trace helps nobody diagnose that.
+                Console.Error.WriteLine($"Cannot listen on {config.Raw.General.ListenUrl}: {socketError.Message}");
+                Console.Error.WriteLine(
+                    "Another SmokePing.NET may already be running, or another program holds the port. " +
+                    "Change general.listenUrl in the configuration, or stop the other program.");
+                return 1;
+            }
+
             onStarted();
 
             // Stop on Ctrl+C or SIGTERM as usual, and also when the service control
@@ -151,6 +182,24 @@ public static class Program
         {
             app.Services.GetRequiredService<DataStore>().Dispose();
         }
+    }
+
+    /// <summary>
+    /// Digs the socket error out of the exception chain. Kestrel wraps it twice - in
+    /// an AddressInUseException and then an IOException - so the inner exception is
+    /// not the one that says what actually went wrong.
+    /// </summary>
+    private static SocketException? FindSocketError(Exception exception)
+    {
+        for (var current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is SocketException socketException)
+            {
+                return socketException;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>Builds a registry for the validation pass, before the host exists.</summary>

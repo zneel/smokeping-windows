@@ -261,6 +261,58 @@ public static class StorageTests
             Assert.Close(11.0, latest!.Median!.Value, 0.001, "it is the round that was written");
         });
 
+        runner.Add("DataStore: retention matches the upstream archive table", () =>
+        {
+            // Pinned because the retention is a documented promise, and a plan that
+            // quietly drifts from it would go unnoticed until someone lost history.
+            const int Step = 300;
+            var expected = new[]
+            {
+                (StepSeconds: 300, Days: 100.0),
+                (StepSeconds: 3600, Days: 400.0),
+                (StepSeconds: 43200, Days: 1200.0),
+            };
+
+            Assert.Equal(expected.Length, DataStore.ArchivePlan.Length, "three resolution tiers");
+
+            for (var i = 0; i < expected.Length; i++)
+            {
+                var (multiplier, slots) = DataStore.ArchivePlan[i];
+                Assert.Equal(expected[i].StepSeconds, multiplier * Step, $"tier {i} resolution");
+                Assert.Close(
+                    expected[i].Days,
+                    (double)multiplier * Step * slots / 86400,
+                    0.01,
+                    $"tier {i} retention");
+            }
+        });
+
+        runner.Add("DataStore: a target database is the size the documentation claims", () =>
+        {
+            using var directory = new TempDirectory();
+            using var store = new DataStore(directory.Path);
+
+            var target = new Configuration.MeasuredTarget
+            {
+                Id = "sizing",
+                Title = "sizing",
+                Host = "192.0.2.1",
+                ProbeType = "icmp",
+                StepSeconds = 300,
+                Pings = 20,
+                PingIntervalMs = 500,
+                TimeoutMs = 1500,
+                PacketSize = 56,
+                AlertRules = [],
+                ParentId = string.Empty,
+            };
+
+            store.GetOrOpen(target);
+            var megabytes = new FileInfo(store.ResolvePath(target.Id)).Length / 1024.0 / 1024.0;
+
+            Assert.True(megabytes is > 2.0 and < 3.0, $"about 2.5 MB per target, got {megabytes:F2} MB");
+        });
+
         runner.Add("DataStore: target ids map to safe paths", () =>
         {
             using var directory = new TempDirectory();

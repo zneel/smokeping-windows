@@ -19,6 +19,7 @@ public sealed class PollingService : BackgroundService
     private readonly DataStore _store;
     private readonly AlertEngine _alertEngine;
     private readonly AlertNotifier _notifier;
+    private readonly HostResolver _hostResolver;
     private readonly ILogger<PollingService> _logger;
     private readonly TimeProvider _timeProvider;
 
@@ -28,6 +29,7 @@ public sealed class PollingService : BackgroundService
         DataStore store,
         AlertEngine alertEngine,
         AlertNotifier notifier,
+        HostResolver hostResolver,
         ILogger<PollingService> logger,
         TimeProvider timeProvider)
     {
@@ -36,6 +38,7 @@ public sealed class PollingService : BackgroundService
         _store = store;
         _alertEngine = alertEngine;
         _notifier = notifier;
+        _hostResolver = hostResolver;
         _logger = logger;
         _timeProvider = timeProvider;
     }
@@ -73,7 +76,12 @@ public sealed class PollingService : BackgroundService
 
             try
             {
-                var measurements = await probe.MeasureAsync(target, stoppingToken).ConfigureAwait(false);
+                // Resolved every round rather than once at start-up, so a machine that
+                // moves to a different network starts measuring its new gateway.
+                var measured = ResolveHost(target);
+                var measurements = measured is null
+                    ? new double?[target.Pings]
+                    : await probe.MeasureAsync(measured, stoppingToken).ConfigureAwait(false);
                 var (sent, lost, quantiles) = Quantiles.Compute(measurements);
 
                 // Jitter depends on the order the probes came back in, which the
@@ -110,6 +118,22 @@ public sealed class PollingService : BackgroundService
                 _logger.LogError(ex, "Measurement round for {Target} failed.", target.Id);
             }
         }
+    }
+
+    /// <summary>
+    /// Substitutes a dynamic host token for the address it currently names. Returns
+    /// null when the token cannot be resolved, which is recorded as a lost round
+    /// rather than being allowed to stop the target's loop.
+    /// </summary>
+    private MeasuredTarget? ResolveHost(MeasuredTarget target)
+    {
+        if (!target.HasDynamicHost)
+        {
+            return target;
+        }
+
+        var resolved = _hostResolver.Resolve(target.Host);
+        return resolved is null ? null : target with { Host = resolved };
     }
 
     private async Task RaiseAlertsAsync(MeasuredTarget target, Sample sample, CancellationToken cancellationToken)

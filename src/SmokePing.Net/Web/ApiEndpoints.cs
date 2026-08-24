@@ -37,12 +37,13 @@ public static partial class ApiEndpoints
             targetCount = config.Targets.Count,
         }));
 
-        app.MapGet("/api/targets", (LoadedConfiguration config, ProbeRegistry probes) => Results.Ok(
+        app.MapGet("/api/targets", (LoadedConfiguration config, ProbeRegistry probes, HostResolver resolver) => Results.Ok(
             config.Targets.Select(target => new
             {
                 target.Id,
                 target.Title,
                 target.Host,
+                resolvedHost = target.HasDynamicHost ? resolver.Resolve(target.Host) : target.Host,
                 target.ProbeType,
                 target.StepSeconds,
                 target.Pings,
@@ -56,7 +57,8 @@ public static partial class ApiEndpoints
             string? range,
             LoadedConfiguration config,
             DataStore store,
-            ProbeRegistry probes) =>
+            ProbeRegistry probes,
+            HostResolver resolver) =>
         {
             if (!config.TryGetTarget(id, out var target))
             {
@@ -74,6 +76,7 @@ public static partial class ApiEndpoints
                 target.Id,
                 target.Title,
                 target.Host,
+                resolvedHost = target.HasDynamicHost ? resolver.Resolve(target.Host) : target.Host,
                 target.ProbeType,
                 target.Description,
                 target.Pings,
@@ -107,7 +110,8 @@ public static partial class ApiEndpoints
             string? subtitle,
             LoadedConfiguration config,
             DataStore store,
-            ProbeRegistry probes) =>
+            ProbeRegistry probes,
+            HostResolver resolver) =>
         {
             // The graph id carries a .svg suffix so it can be used directly in an <img>.
             id = id.EndsWith(".svg", StringComparison.OrdinalIgnoreCase) ? id[..^4] : id;
@@ -130,7 +134,7 @@ public static partial class ApiEndpoints
                 StepSeconds = database.Archives[archive].StepSeconds,
                 // The heading is part of the picture so an embedded graph explains
                 // itself; a caller that already labels it can pass an empty override.
-                Title = title ?? $"{target.Title} - {target.Host}",
+                Title = title ?? $"{target.Title} - {(target.HasDynamicHost ? resolver.Resolve(target.Host) ?? target.Host : target.Host)}",
                 Subtitle = subtitle ?? probes.Get(target.ProbeType).Describe(target),
                 PlotWidth = Math.Clamp(width ?? 600, 120, 2000),
                 PlotHeight = Math.Clamp(height ?? 200, 30, 1000),

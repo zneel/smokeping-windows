@@ -122,7 +122,7 @@ public sealed class AlertRuleConfig
 }
 
 /// <summary>A fully resolved target with all inherited settings applied.</summary>
-public sealed class MeasuredTarget
+public sealed record MeasuredTarget
 {
     public required string Id { get; init; }
 
@@ -154,6 +154,9 @@ public sealed class MeasuredTarget
 
     /// <summary>Menu path of the parent node, empty for top-level targets.</summary>
     public required string ParentId { get; init; }
+
+    /// <summary>True when <see cref="Host"/> is a token resolved at measurement time.</summary>
+    public bool HasDynamicHost => Probes.HostResolver.IsToken(Host);
 }
 
 /// <summary>A menu entry exposed to the web front end.</summary>

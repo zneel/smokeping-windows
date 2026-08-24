@@ -12,15 +12,18 @@ public sealed class DataStore : IDisposable
 {
     /// <summary>
     /// Resolution tiers created for every target, as (multiple of the polling step, slots).
-    /// With the default 300s step this is 14 days at full resolution, 60 days at 30
-    /// minutes, one year at two hours and five years at one day - about 700 KB per target.
+    /// These are upstream's default RRA rows, so retention matches an existing SmokePing
+    /// installation: with the default 300s step, 100 days at full resolution, 400 days
+    /// at one hour and 1200 days at twelve hours - about 2.5 MB per target, forever.
+    ///
+    /// Upstream also keeps separate MIN and MAX archives for the coarser tiers; the
+    /// stored quantiles already carry both, so they are not needed here.
     /// </summary>
-    private static readonly (int Multiplier, int SlotCount)[] ArchivePlan =
+    public static readonly (int Multiplier, int SlotCount)[] ArchivePlan =
     [
-        (1, 4032),
-        (6, 2880),
-        (24, 4380),
-        (288, 1825),
+        (1, 28800),
+        (12, 9600),
+        (144, 2400),
     ];
 
     private readonly ConcurrentDictionary<string, RoundRobinFile> _files = new(StringComparer.OrdinalIgnoreCase);
