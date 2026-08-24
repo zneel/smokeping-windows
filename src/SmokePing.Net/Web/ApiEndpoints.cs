@@ -7,6 +7,7 @@ using SmokePing.Net.Alerting;
 using SmokePing.Net.Configuration;
 using SmokePing.Net.Graphing;
 using SmokePing.Net.Probes;
+using SmokePing.Net.Rrd;
 using SmokePing.Net.Storage;
 
 namespace SmokePing.Net.Web;
@@ -22,6 +23,29 @@ public static partial class ApiEndpoints
         ("Last 10 Days", "10d"),
         ("Last 360 Days", "360d"),
     ];
+
+    /// <summary>
+    /// Reads a period for a target from whichever store is configured, so the web
+    /// interface does not care which format the measurements are kept in.
+    /// </summary>
+    private static (IReadOnlyList<Storage.Sample> Samples, int StepSeconds) ReadSamples(
+        MeasuredTarget target,
+        DataStore store,
+        RrdTargetStore? rrdStore,
+        long from,
+        long to)
+    {
+        if (rrdStore is not null)
+        {
+            var file = rrdStore.GetOrOpen(target, to);
+            var archive = RrdTargetStore.SelectArchive(file, to - from);
+            return (rrdStore.Read(target, from, to), (int)file.RowStep(archive));
+        }
+
+        var database = store.GetOrOpen(target);
+        var index = database.SelectArchive(to - from);
+        return (database.Read(index, from, to), database.Archives[index].StepSeconds);
+    }
 
     public static void MapSmokePingApi(this IEndpointRouteBuilder app)
     {
@@ -58,7 +82,8 @@ public static partial class ApiEndpoints
             LoadedConfiguration config,
             DataStore store,
             ProbeRegistry probes,
-            HostResolver resolver) =>
+            HostResolver resolver,
+            RrdTargetStore? rrdStore = null) =>
         {
             if (!config.TryGetTarget(id, out var target))
             {
@@ -66,9 +91,7 @@ public static partial class ApiEndpoints
             }
 
             var (from, to) = ResolveRange(range);
-            var database = store.GetOrOpen(target);
-            var archive = database.SelectArchive(to - from);
-            var samples = database.Read(archive, from, to);
+            var (samples, stepSeconds) = ReadSamples(target, store, rrdStore, from, to);
             var statistics = GraphStatistics.Compute(samples);
 
             return Results.Ok(new
@@ -81,7 +104,7 @@ public static partial class ApiEndpoints
                 target.Description,
                 target.Pings,
                 probeDescription = probes.Get(target.ProbeType).Describe(target),
-                stepSeconds = database.Archives[archive].StepSeconds,
+                stepSeconds,
                 from,
                 to,
                 statistics,
@@ -111,7 +134,8 @@ public static partial class ApiEndpoints
             LoadedConfiguration config,
             DataStore store,
             ProbeRegistry probes,
-            HostResolver resolver) =>
+            HostResolver resolver,
+            RrdTargetStore? rrdStore = null) =>
         {
             // The graph id carries a .svg suffix so it can be used directly in an <img>.
             id = id.EndsWith(".svg", StringComparison.OrdinalIgnoreCase) ? id[..^4] : id;
@@ -122,16 +146,15 @@ public static partial class ApiEndpoints
             }
 
             var (from, to) = ResolveRange(range);
-            var database = store.GetOrOpen(target);
-            var archive = database.SelectArchive(to - from);
+            var (samples, stepSeconds) = ReadSamples(target, store, rrdStore, from, to);
 
             var request = new GraphRequest
             {
-                Samples = database.Read(archive, from, to),
+                Samples = samples,
                 Pings = target.Pings,
                 FromTimestamp = from,
                 ToTimestamp = to,
-                StepSeconds = database.Archives[archive].StepSeconds,
+                StepSeconds = stepSeconds,
                 // The heading is part of the picture so an embedded graph explains
                 // itself; a caller that already labels it can pass an empty override.
                 Title = title ?? $"{target.Title} - {(target.HasDynamicHost ? resolver.Resolve(target.Host) ?? target.Host : target.Host)}",
@@ -166,7 +189,8 @@ public static partial class ApiEndpoints
             string? range,
             int? entries,
             LoadedConfiguration config,
-            DataStore store) =>
+            DataStore store,
+            RrdTargetStore? rrdStore = null) =>
         {
             var (from, to) = ResolveRange(range ?? "10h");
             var limit = Math.Clamp(entries ?? 5, 1, 50);
@@ -176,9 +200,7 @@ public static partial class ApiEndpoints
             // median over the window.
             var rows = config.Targets.Select(target =>
             {
-                var database = store.GetOrOpen(target);
-                var archive = database.SelectArchive(to - from);
-                var samples = database.Read(archive, from, to);
+                var (samples, _) = ReadSamples(target, store, rrdStore, from, to);
                 var latest = samples.LastOrDefault(sample => sample.Sent > 0);
                 return new { target, statistics = GraphStatistics.Compute(samples), latest };
             })

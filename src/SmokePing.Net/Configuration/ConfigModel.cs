@@ -32,6 +32,13 @@ public sealed class ArchiveConfig
 public sealed class DatabaseConfig
 {
     /// <summary>
+    /// Storage format: "spd" for the built-in round-robin files, or "rrd" for
+    /// RRDtool files laid out as SmokePing lays them out, which an existing
+    /// installation's data can be read from and which rrdtool can still read.
+    /// </summary>
+    public string Format { get; set; } = "spd";
+
+    /// <summary>
     /// Resolution tiers. Empty means the built-in plan, which matches upstream's
     /// default archive table.
     /// </summary>

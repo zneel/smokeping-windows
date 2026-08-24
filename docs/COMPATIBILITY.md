@@ -126,7 +126,7 @@ measured is not: an unimplemented probe or an unsupported host form is an error.
 client, no mail templates and no `smokemail`.
 
 **Not implemented.** Master/slave distributed measurement, the CGI and its
-`basepage.html` templating, RRDtool integration, hierarchies, the `Chartlist`
+`basepage.html` templating, hierarchies, the `Chartlist`
 navigation cache, DYNAMIC hosts, multi-host targets, uptime tracking and its legend
 row, `unison_tolerance`, logarithmic axes, and remote-triggered graph zooming.
 

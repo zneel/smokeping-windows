@@ -170,6 +170,31 @@ explicitly. That is rejected at start-up rather than at the first round.
 Fewer, slower probes suit HTTP: twenty full requests every five minutes is a load
 test, not a measurement.
 
+### Storage format
+
+```jsonc
+"database": {
+  "format": "rrd",              // "spd" (default) or "rrd"
+  "archives": [                 // optional; defaults to upstream's table
+    { "steps": 1,   "rows": 28800 },
+    { "steps": 12,  "rows": 9600 },
+    { "steps": 144, "rows": 2400 }
+  ]
+}
+```
+
+`rrd` writes real RRDtool files with SmokePing's own schema, so an existing
+installation's `.rrd` files can be used in place and `rrdtool` reads what this writes.
+Pick it when the files have to interoperate. The cost is that the whole file is
+rewritten on every round, and jitter is not stored — RRD's schema has nowhere for it.
+
+`spd` is the built-in format: fixed-size records appended in place, and it carries
+jitter. It cannot be read by `rrdtool`.
+
+Note that RRDtool cannot change a step in place. If a `.rrd` file's step does not match
+the configured one, start-up says so rather than guessing; use `rrdtool tune` or move
+the file aside.
+
 ### Stored measurements
 
 Each round stores the number of probes sent and lost, eleven quantiles of the

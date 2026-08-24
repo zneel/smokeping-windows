@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using SmokePing.Net.Alerting;
 using SmokePing.Net.Configuration;
 using SmokePing.Net.Probes;
+using SmokePing.Net.Rrd;
 using SmokePing.Net.Storage;
 
 namespace SmokePing.Net.Services;
@@ -33,6 +34,13 @@ public static class ServiceRegistration
             .ToList();
 
         services.AddSingleton(new DataStore(config.DataDirectory, plan));
+
+        // RRDtool storage is opt-in: it is what lets an existing installation's files
+        // be used in place, at the cost of rewriting the whole file on every round.
+        if (config.Raw.Database.Format.Equals("rrd", StringComparison.OrdinalIgnoreCase))
+        {
+            services.AddSingleton(new RrdTargetStore(config.DataDirectory, plan));
+        }
         services.AddSingleton(new AlertEngine(config.Alerts));
         services.AddSingleton<AlertNotifier>();
         services.AddSingleton<HostResolver>();

@@ -182,7 +182,12 @@ out of the alert state; set `"edgeTrigger": false` to be told every round instea
 
 ## Storage
 
-Each target gets one fixed-size `.spd` file that never grows. It holds the same
+Two storage formats. Setting `"database": { "format": "rrd" }` writes real RRDtool
+files with SmokePing's own schema, so an existing installation's `.rrd` files are used
+in place and `rrdtool` still reads everything written. That is verified both ways
+against rrdtool 1.7.2 in the test suite.
+
+The default format is built in. Each target gets one fixed-size `.spd` file that never grows. It holds the same
 resolution tiers upstream's default RRA table does, so retention matches an existing
 SmokePing installation:
 

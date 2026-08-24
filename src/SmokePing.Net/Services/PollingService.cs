@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using SmokePing.Net.Alerting;
 using SmokePing.Net.Configuration;
 using SmokePing.Net.Probes;
+using SmokePing.Net.Rrd;
 using SmokePing.Net.Storage;
 
 namespace SmokePing.Net.Services;
@@ -17,6 +18,7 @@ public sealed class PollingService : BackgroundService
     private readonly LoadedConfiguration _config;
     private readonly ProbeRegistry _probes;
     private readonly DataStore _store;
+    private readonly RrdTargetStore? _rrdStore;
     private readonly AlertEngine _alertEngine;
     private readonly AlertNotifier _notifier;
     private readonly HostResolver _hostResolver;
@@ -27,6 +29,7 @@ public sealed class PollingService : BackgroundService
         LoadedConfiguration config,
         ProbeRegistry probes,
         DataStore store,
+        RrdTargetStore? rrdStore,
         AlertEngine alertEngine,
         AlertNotifier notifier,
         HostResolver hostResolver,
@@ -36,6 +39,7 @@ public sealed class PollingService : BackgroundService
         _config = config;
         _probes = probes;
         _store = store;
+        _rrdStore = rrdStore;
         _alertEngine = alertEngine;
         _notifier = notifier;
         _hostResolver = hostResolver;
@@ -54,7 +58,14 @@ public sealed class PollingService : BackgroundService
         // immediately rather than at the first round of some target hours later.
         foreach (var target in _config.Targets)
         {
-            _store.GetOrOpen(target);
+            if (_rrdStore is null)
+            {
+                _store.GetOrOpen(target);
+            }
+            else
+            {
+                _rrdStore.GetOrOpen(target, _timeProvider.GetUtcNow().ToUnixTimeSeconds());
+            }
         }
 
         var loops = _config.Targets.Select(target => RunTargetAsync(target, stoppingToken));
@@ -64,7 +75,7 @@ public sealed class PollingService : BackgroundService
     private async Task RunTargetAsync(MeasuredTarget target, CancellationToken stoppingToken)
     {
         var probe = _probes.Get(target.ProbeType);
-        var database = _store.GetOrOpen(target);
+        var database = _rrdStore is null ? _store.GetOrOpen(target) : null;
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -94,7 +105,15 @@ public sealed class PollingService : BackgroundService
                 // Jitter depends on the order the probes came back in, which the
                 // stored quantiles do not preserve, so it is computed here.
                 var jitter = Jitter.Compute(measurements);
-                database.Write(slotStart.Value, sent, lost, quantiles, jitter, median);
+
+                if (_rrdStore is not null)
+                {
+                    _rrdStore.Write(target, slotStart.Value, measurements);
+                }
+                else
+                {
+                    database!.Write(slotStart.Value, sent, lost, quantiles, jitter, median);
+                }
 
                 var sample = new Sample
                 {
