@@ -271,6 +271,13 @@ none of its own graphs read them.
 Ignored without complaint: everything describing machinery this does not have — the
 CGI URL, mail hosts and templates, image caches, `*** Presentation ***`, `*** Slaves ***`.
 
+A native configuration has no equivalent of `listenUrl`, because upstream serves
+through a CGI rather than binding a port of its own. Use `--listen` to set it:
+
+```powershell
+SmokePing.Net.exe --config C:\smokeping\etc\config --listen http://+:8081
+```
+
 Reported rather than ignored, because they change what gets measured: an unimplemented
 probe class, an alert using a matcher plugin, and targets whose host is `DYNAMIC`, a
 list of `/target/paths`, or carries a `~slave` suffix. Pass `--skip-unsupported` to

@@ -127,7 +127,9 @@ public static class Program
             builder.Logging.AddProvider(new FileLoggerProvider(logFile));
         }
 
-        builder.WebHost.UseUrls(config.Raw.General.ListenUrl);
+        // A native SmokePing configuration has no equivalent of listenUrl - upstream
+        // serves through a CGI - so the command line has to be able to set it.
+        builder.WebHost.UseUrls(options.ListenUrl ?? config.Raw.General.ListenUrl);
 
         builder.Services.AddSmokePingServices(config);
 
@@ -160,7 +162,7 @@ public static class Program
         logger.LogInformation(
             "{Site} listening on {Url}, data in {DataDirectory}.",
             config.Raw.General.SiteName,
-            config.Raw.General.ListenUrl,
+            options.ListenUrl ?? config.Raw.General.ListenUrl,
             config.DataDirectory);
 
         try
@@ -173,7 +175,8 @@ public static class Program
             {
                 // Almost always a second copy already running, or something else on
                 // the port. A stack trace helps nobody diagnose that.
-                Console.Error.WriteLine($"Cannot listen on {config.Raw.General.ListenUrl}: {socketError.Message}");
+                Console.Error.WriteLine(
+                    $"Cannot listen on {options.ListenUrl ?? config.Raw.General.ListenUrl}: {socketError.Message}");
                 Console.Error.WriteLine(
                     "Another SmokePing.NET may already be running, or another program holds the port. " +
                     "Change general.listenUrl in the configuration, or stop the other program.");
@@ -245,7 +248,8 @@ public sealed class CommandLineOptions
 
         Usage: SmokePing.Net [options]
 
-          --config <path>   Configuration file (default: config/smokeping.json)
+          --config <path>   Configuration file: JSON, or SmokePing's own format
+          --listen <url>    Web interface address (default: http://localhost:8081)
           --check           Validate the configuration and exit
           --service         Run under the Windows service control manager
           --service-name    Service name to register as (default: SmokePingNet)
@@ -273,6 +277,9 @@ public sealed class CommandLineOptions
 
     /// <summary>Drop targets that cannot be measured rather than refusing to start.</summary>
     public bool SkipUnsupported { get; private init; }
+
+    /// <summary>Overrides the address the web interface binds to.</summary>
+    public string? ListenUrl { get; private init; }
 
     public bool ShowHelp { get; private init; }
 
@@ -312,6 +319,7 @@ public sealed class CommandLineOptions
         var checkOnly = false;
         var noPolling = false;
         var skipUnsupported = false;
+        string? listenUrl = null;
         var showHelp = false;
         var runAsService = false;
         var serviceName = "SmokePingNet";
@@ -342,6 +350,9 @@ public sealed class CommandLineOptions
                 case "--skip-unsupported":
                     skipUnsupported = true;
                     break;
+                case "--listen" when i + 1 < args.Length:
+                    listenUrl = args[++i];
+                    break;
                 default:
                     showHelp = true;
                     break;
@@ -357,6 +368,7 @@ public sealed class CommandLineOptions
             CheckOnly = checkOnly,
             NoPolling = noPolling,
             SkipUnsupported = skipUnsupported,
+            ListenUrl = listenUrl,
             ShowHelp = showHelp,
             RunAsService = runAsService,
             ServiceName = serviceName,
