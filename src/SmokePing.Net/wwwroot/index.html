@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SmokePing.NET</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>&#128168;</text></svg>">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span>
+        <strong id="site-name">SmokePing.NET</strong>
+        <small id="site-owner"></small>
+      </span>
+    </div>
+    <nav class="topnav">
+      <a href="#/" data-nav="overview">Overview</a>
+      <a href="#/charts" data-nav="charts">Charts</a>
+      <a href="#/alerts" data-nav="alerts">Alerts<span id="alert-badge" class="badge" hidden>0</span></a>
+    </nav>
+    <div class="controls">
+      <label class="toggle">
+        <input type="checkbox" id="auto-refresh" checked>
+        <span>Auto refresh</span>
+      </label>
+      <button id="theme-toggle" type="button" title="Switch between light and dark">Light</button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="sidebar-title">Targets</div>
+      <nav id="menu" class="menu"></nav>
+    </aside>
+    <main id="content" class="content">
+      <p class="placeholder">Loading&hellip;</p>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

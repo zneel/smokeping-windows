@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>SmokePing.Net.Tests</RootNamespace>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!--
+      This is a self-contained test runner rather than an xunit project: the whole
+      solution deliberately has no NuGet dependencies, so it builds and tests on a
+      machine with nothing but the .NET SDK installed.
+    -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The application is an ASP.NET Core app; the tests reach into its service wiring. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/SmokePing.Net/SmokePing.Net.csproj" />
+  </ItemGroup>
+
+</Project>

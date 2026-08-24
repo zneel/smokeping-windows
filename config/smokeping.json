@@ -1,0 +1,103 @@
+{
+  "general": {
+    "siteName": "SmokePing.NET",
+    "owner": "Network Operations",
+    "contactEmail": "noc@example.com",
+    "dataDirectory": "../data",
+    "listenUrl": "http://localhost:8081"
+  },
+
+  "defaults": {
+    "probe": "icmp",
+    "step": 300,
+    "pings": 20,
+    "pingIntervalMs": 500,
+    "timeoutMs": 1500,
+    "packetSize": 56,
+    "alertRules": ["someloss", "hostdown"]
+  },
+
+  "alerts": [
+    {
+      "name": "someloss",
+      "type": "loss",
+      "pattern": ">0%,*12*,>0%,*12*,>0%",
+      "comment": "loss 3 times in a row",
+      "edgeTrigger": true
+    },
+    {
+      "name": "hostdown",
+      "type": "loss",
+      "pattern": "==100%,==100%,==100%",
+      "comment": "host has not answered for three rounds",
+      "edgeTrigger": true,
+      "priority": 1
+    },
+    {
+      "name": "slowdown",
+      "type": "rtt",
+      "pattern": "<100,<100,<100,<100,>200,>200,>200",
+      "comment": "round trip time stepped up above 200ms",
+      "edgeTrigger": true
+    }
+  ],
+
+  "targets": [
+    {
+      "id": "local",
+      "title": "Local Network",
+      "children": [
+        {
+          "id": "gateway",
+          "title": "Default Gateway",
+          "host": "192.168.1.1",
+          "description": "The router everything else goes through."
+        },
+        {
+          "id": "dns",
+          "title": "Router DNS",
+          "host": "192.168.1.1",
+          "probe": "dns",
+          "query": "www.example.com",
+          "alertRules": ["hostdown"]
+        }
+      ]
+    },
+    {
+      "id": "internet",
+      "title": "Internet",
+      "children": [
+        {
+          "id": "cloudflare",
+          "title": "Cloudflare DNS",
+          "host": "1.1.1.1"
+        },
+        {
+          "id": "google",
+          "title": "Google DNS",
+          "host": "8.8.8.8"
+        },
+        {
+          "id": "example-web",
+          "title": "example.com over HTTPS",
+          "host": "example.com",
+          "probe": "http",
+          "url": "https://example.com/",
+          "pings": 5,
+          "pingIntervalMs": 2000,
+          "timeoutMs": 10000,
+          "alertRules": ["someloss", "slowdown"]
+        },
+        {
+          "id": "example-tls",
+          "title": "example.com TCP 443",
+          "host": "example.com",
+          "probe": "tcp",
+          "port": 443,
+          "pings": 10,
+          "pingIntervalMs": 1000
+        }
+      ]
+    }
+  ]
+}
