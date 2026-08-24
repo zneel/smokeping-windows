@@ -51,12 +51,26 @@ public static class GraphingTests
             }
         });
 
-        runner.Add("YScale: the axis leaves room above the slowest probe", () =>
+        runner.Add("YScale: the axis follows the median, not an outlier", () =>
         {
-            var scale = YScale.For([SampleAt(0, 10, 100)], 200);
+            // A steady 20ms target with one 400ms probe. Scaling to the outlier would
+            // squash the line everyone reads into the bottom of the plot, so the axis
+            // tracks the median and lets the outlier clip - as the original does.
+            var steady = SampleWithMedian(0, 20);
+            var spike = new Sample
+            {
+                Timestamp = 300,
+                Sent = 20,
+                Lost = 0,
+                Quantiles = Quantiles.FromSamples([20.0, 400.0]),
+                MedianValue = 20,
+            };
+
+            var scale = YScale.For([steady, spike], 200);
 
             Assert.True(scale.HasData, "there is data to scale");
-            Assert.True(scale.ToPixels(100) < 200, "the peak sits below the top of the plot");
+            Assert.True(scale.ToPixels(20) > 150, "the median sits high in the plot, not squashed at the bottom");
+            Assert.Equal(200.0, scale.ToPixels(400), "the outlier clips to the frame instead of rescaling it");
             Assert.True(scale.Ticks.Count > 1, "the axis is labelled");
         });
 
@@ -71,12 +85,12 @@ public static class GraphingTests
 
         runner.Add("GraphStatistics: the round trip figures describe the median series", () =>
         {
-            // Medians of 20, 30 and 40; the figures describe those, not the spread of
-            // individual probes, which is what the smoke already shows.
+            // The figures describe the per-round medians, not the spread of individual
+            // probes, which is what the smoke already shows.
             var stats = GraphStatistics.Compute([
-                SampleAt(0, 10, 30),
-                SampleAt(60, 20, 40),
-                SampleAt(120, 30, 50),
+                SampleWithMedian(0, 20),
+                SampleWithMedian(60, 30),
+                SampleWithMedian(120, 40),
             ]);
 
             Assert.True(stats.HasData, "three rounds have data");
@@ -299,6 +313,16 @@ public static class GraphingTests
         .OfType<RectanglePrimitive>()
         .Count(r => r.Fill == LossColours.TotalLossColour);
 
+    /// <summary>A clean round with a known median, for tests about the figures.</summary>
+    private static Sample SampleWithMedian(long timestamp, double median) => new()
+    {
+        Timestamp = timestamp,
+        Sent = 20,
+        Lost = 0,
+        Quantiles = Quantiles.FromSamples([median]),
+        MedianValue = (float)median,
+    };
+
     private static GraphScene Scene(IReadOnlyList<Sample> samples, bool compact = false) =>
         SmokeGraphLayout.Build(BuildRequest(samples, compact: compact));
 
@@ -333,13 +357,18 @@ public static class GraphingTests
             .ToList();
 
     /// <summary>A round with a given number of probes lost, all answers at 20ms.</summary>
-    private static Sample SampleWithLoss(long timestamp, int sent, int lost) => new()
+    private static Sample SampleWithLoss(long timestamp, int sent, int lost)
     {
-        Timestamp = timestamp,
-        Sent = sent,
-        Lost = lost,
-        Quantiles = Quantiles.FromSamples(Enumerable.Repeat(20.0, sent - lost).ToList()),
-    };
+        var received = Enumerable.Repeat(20.0, sent - lost).ToList();
+        return new Sample
+        {
+            Timestamp = timestamp,
+            Sent = sent,
+            Lost = lost,
+            Quantiles = Quantiles.FromSamples(received, sent),
+            MedianValue = Quantiles.Median(received),
+        };
+    }
 
     /// <summary>A round whose probes are spread evenly between two values.</summary>
     private static Sample SampleAt(long timestamp, double fastest, double slowest)
@@ -354,6 +383,7 @@ public static class GraphingTests
             Sent = 20,
             Lost = 0,
             Quantiles = Quantiles.FromSamples(values),
+            MedianValue = Quantiles.Median(values),
         };
     }
 }

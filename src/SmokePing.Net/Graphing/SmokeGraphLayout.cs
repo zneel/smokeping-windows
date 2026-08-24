@@ -176,7 +176,10 @@ public static class SmokeGraphLayout
                 continue;
             }
 
-            var colour = LossColours.ToBackground(LossColours.ForLoss(sample.Lost, sample.Sent));
+            // The loss scale is always the configured round size. A consolidated
+            // bucket sums Sent across its rounds, so using it here would build a
+            // scale for a 240-probe round and disagree with the printed key.
+            var colour = LossColours.ToBackground(LossColours.ForLossFraction(sample.LossFraction, request.Pings));
             items.Add(new RectanglePrimitive(
                 plot.XFor(sample.Timestamp, request),
                 plot.Top,
@@ -299,7 +302,7 @@ public static class SmokeGraphLayout
                 continue;
             }
 
-            var colour = LossColours.ForLoss(sample.Lost, sample.Sent == 0 ? request.Pings : sample.Sent);
+            var colour = LossColours.ForLossFraction(sample.LossFraction, request.Pings);
             var x = plot.XFor(sample.Timestamp, request) + half;
             var y = plot.Bottom - scale.ToPixels(median);
 

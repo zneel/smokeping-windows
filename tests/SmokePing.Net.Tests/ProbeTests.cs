@@ -102,11 +102,11 @@ public static class ProbeTests
         {
             var probe = new ScriptedProbe([10.0, 20.0, null, 40.0]);
             var results = probe.MeasureAsync(Target(pings: 4), CancellationToken.None).GetAwaiter().GetResult();
-            var (sent, lost, quantiles) = Quantiles.Compute(results);
+            var (sent, lost, median, _) = Quantiles.Compute(results);
 
             Assert.Equal(4, sent, "four probes were sent");
             Assert.Equal(1, lost, "one was lost");
-            Assert.Close(20.0, quantiles[Sample.MedianIndex], 0.001, "the median ignores the lost probe");
+            Assert.Close(20.0, median, 0.001, "the median is the middle of what came back");
         });
 
         runner.Add("TcpProbe: a listening port is measured, a closed one is loss", () =>

@@ -11,17 +11,26 @@ public sealed class Sample
     /// <summary>Number of quantiles stored per sample (0%, 10%, ..., 100%).</summary>
     public const int QuantileCount = 11;
 
-    /// <summary>Index into <see cref="Quantiles"/> holding the median.</summary>
-    public const int MedianIndex = 5;
-
     public required long Timestamp { get; init; }
 
     public required int Sent { get; init; }
 
     public required int Lost { get; init; }
 
-    /// <summary>Round-trip times in milliseconds at 0%, 10%, ... 100%.</summary>
+    /// <summary>
+    /// Round-trip times in milliseconds across the round, at 0%, 10%, ... 100%.
+    /// Entries that fall on a lost probe are <see cref="float.NaN"/>, which is what
+    /// makes the smoke band narrow as loss rises.
+    /// </summary>
     public required float[] Quantiles { get; init; }
+
+    /// <summary>
+    /// Median round-trip time in milliseconds, or <see cref="float.NaN"/> when nothing
+    /// came back. Stored in its own right rather than read out of the quantile vector,
+    /// because the original keeps it as a separate data source computed only from the
+    /// probes that were received.
+    /// </summary>
+    public float MedianValue { get; init; } = float.NaN;
 
     /// <summary>
     /// Mean absolute variation between consecutive probes, in milliseconds, or
@@ -31,7 +40,7 @@ public sealed class Sample
     public float Jitter { get; init; } = float.NaN;
 
     /// <summary>Median round-trip time in milliseconds, or null when the round was a total loss.</summary>
-    public double? Median => float.IsNaN(Quantiles[MedianIndex]) ? null : Quantiles[MedianIndex];
+    public double? Median => float.IsNaN(MedianValue) ? null : MedianValue;
 
     /// <summary>Fraction of probes lost, 0.0 - 1.0.</summary>
     public double LossFraction => Sent == 0 ? 0 : (double)Lost / Sent;
@@ -45,6 +54,7 @@ public sealed class Sample
         Sent = 0,
         Lost = 0,
         Quantiles = CreateNaNQuantiles(),
+        MedianValue = float.NaN,
         Jitter = float.NaN,
     };
 

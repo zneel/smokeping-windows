@@ -24,23 +24,28 @@ public sealed record ArchiveInfo(int StepSeconds, int SlotCount, long Offset)
 ///
 /// Layout:
 ///   header (64 bytes) | archive descriptors (16 bytes each) | slot data
-/// Each slot is a fixed 64 bytes: slot index (8), sent (4), lost (4), jitter (4),
-/// 11 quantiles (44).
+/// Each slot is a fixed 68 bytes: slot index (8), sent (4), lost (4), jitter (4),
+/// median (4), 11 quantiles (44).
 /// </summary>
 public sealed class RoundRobinFile : IDisposable
 {
     private const uint Magic = 0x53504442; // "SPDB"
     /// <summary>
-    /// Bumped to 2 when jitter joined each record. A file written by an older
-    /// version is moved aside and recreated rather than misread.
+    /// Bumped to 3 when the median became a stored field in its own right, matching
+    /// the original's separate median data source. A file written by an older version
+    /// is moved aside and recreated rather than misread.
     /// </summary>
-    private const int FormatVersion = 2;
+    private const int FormatVersion = 3;
     private const int HeaderSize = 64;
     private const int ArchiveDescriptorSize = 16;
-    private const int SlotSize = 8 + 4 + 4 + 4 + (Sample.QuantileCount * 4);
+    private const int SlotSize = 8 + 4 + 4 + 4 + 4 + (Sample.QuantileCount * 4);
+
+    private const int JitterOffset = 16;
+
+    private const int MedianOffset = 20;
 
     /// <summary>Byte offset of the quantile vector within a slot record.</summary>
-    private const int QuantileOffset = 20;
+    private const int QuantileOffset = 24;
 
     /// <summary>Slot index written into unused slots.</summary>
     private const long EmptySlot = -1;
@@ -48,6 +53,9 @@ public sealed class RoundRobinFile : IDisposable
     private readonly object _gate = new();
     private readonly FileStream _stream;
     private readonly byte[] _slotBuffer = new byte[SlotSize];
+
+    /// <summary>Newest base-archive slot written, to reject a backwards clock step.</summary>
+    private long _newestSlotIndex = long.MinValue;
 
     private RoundRobinFile(FileStream stream, string path, int stepSeconds, int pingsPerRound, ArchiveInfo[] archives)
     {
@@ -101,9 +109,21 @@ public sealed class RoundRobinFile : IDisposable
 
         if (File.Exists(path))
         {
-            if (TryOpenExisting(path, stepSeconds, pingsPerRound, archivePlan, out var existing))
+            // An unreadable file and an incompatible one need opposite responses. A
+            // sharing violation - a second instance, a backup agent, an indexer - is
+            // transient, and renaming the live database aside for it would throw away
+            // the history and quietly start collecting into an empty file.
+            if (TryOpenExisting(path, stepSeconds, pingsPerRound, archivePlan, out var existing, out var unreadable))
             {
                 return existing;
+            }
+
+            if (unreadable is not null)
+            {
+                throw new IOException(
+                    $"Could not open '{path}': {unreadable.Message} " +
+                    "Refusing to start a new database over it; the history would be lost.",
+                    unreadable);
             }
 
             var backup = $"{path}.{DateTimeOffset.UtcNow:yyyyMMddHHmmss}.bak";
@@ -118,9 +138,11 @@ public sealed class RoundRobinFile : IDisposable
         int stepSeconds,
         int pingsPerRound,
         IReadOnlyList<(int Multiplier, int SlotCount)> archivePlan,
-        out RoundRobinFile file)
+        out RoundRobinFile file,
+        out Exception? unreadable)
     {
         file = null!;
+        unreadable = null;
         FileStream? stream = null;
         try
         {
@@ -177,11 +199,15 @@ public sealed class RoundRobinFile : IDisposable
             }
 
             file = new RoundRobinFile(stream, path, stepSeconds, pingsPerRound, archives);
+            file.RecoverNewestSlot();
             return true;
         }
-        catch (IOException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
+            // Could not read it at all - which says nothing about whether the
+            // contents are still good.
             stream?.Dispose();
+            unreadable = ex;
             return false;
         }
         catch (InvalidDataException)
@@ -230,7 +256,8 @@ public sealed class RoundRobinFile : IDisposable
         // Pre-fill every slot as empty so partial reads never see uninitialised data.
         var empty = new byte[SlotSize];
         BinaryPrimitives.WriteInt64LittleEndian(empty, EmptySlot);
-        BinaryPrimitives.WriteSingleLittleEndian(empty.AsSpan(16), float.NaN);
+        BinaryPrimitives.WriteSingleLittleEndian(empty.AsSpan(JitterOffset), float.NaN);
+        BinaryPrimitives.WriteSingleLittleEndian(empty.AsSpan(MedianOffset), float.NaN);
         for (var i = 0; i < Sample.QuantileCount; i++)
         {
             BinaryPrimitives.WriteSingleLittleEndian(empty.AsSpan(QuantileOffset + (i * 4)), float.NaN);
@@ -252,7 +279,13 @@ public sealed class RoundRobinFile : IDisposable
     /// Stores one measurement round and refreshes every consolidated archive that
     /// covers it. <paramref name="timestamp"/> is snapped down to the base step.
     /// </summary>
-    public void Write(long timestamp, int sent, int lost, float[] quantiles, float jitter = float.NaN)
+    public void Write(
+        long timestamp,
+        int sent,
+        int lost,
+        float[] quantiles,
+        float jitter = float.NaN,
+        float median = float.NaN)
     {
         ArgumentNullException.ThrowIfNull(quantiles);
         if (quantiles.Length != Sample.QuantileCount)
@@ -263,14 +296,28 @@ public sealed class RoundRobinFile : IDisposable
         lock (_gate)
         {
             var slotIndex = timestamp / StepSeconds;
-            WriteSlot(Archives[0], slotIndex, sent, lost, quantiles, jitter);
+
+            // A clock that steps backwards - a restored snapshot, a dead CMOS battery,
+            // a large NTP correction - would otherwise land on slots holding current
+            // data and rewrite already-consolidated buckets from a single round.
+            if (_newestSlotIndex != long.MinValue && slotIndex < _newestSlotIndex)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(timestamp),
+                    $"Refusing to write {DateTimeOffset.FromUnixTimeSeconds(timestamp):u}, which is older " +
+                    $"than the newest sample already stored " +
+                    $"({DateTimeOffset.FromUnixTimeSeconds(_newestSlotIndex * StepSeconds):u}).");
+            }
+
+            _newestSlotIndex = Math.Max(_newestSlotIndex, slotIndex);
+            WriteSlot(Archives[0], slotIndex, sent, lost, quantiles, jitter, median);
 
             for (var i = 1; i < Archives.Count; i++)
             {
                 Consolidate(i, timestamp);
             }
 
-            _stream.Flush();
+            _stream.Flush(flushToDisk: true);
         }
     }
 
@@ -288,8 +335,10 @@ public sealed class RoundRobinFile : IDisposable
 
         var vectors = new List<float[]>();
         var jitters = new List<float>();
+        var medians = new List<float>();
         var sent = 0;
         var lost = 0;
+        var present = 0;
 
         for (var t = bucketStart; t < bucketEnd; t += StepSeconds)
         {
@@ -299,18 +348,42 @@ public sealed class RoundRobinFile : IDisposable
                 continue;
             }
 
+            present++;
             sent += sample.Sent;
             lost += sample.Lost;
             vectors.Add(sample.Quantiles);
             jitters.Add(sample.Jitter);
+            medians.Add(sample.MedianValue);
         }
 
-        if (sent == 0)
+        // RRDtool's xfiles factor: a consolidated point built from mostly-missing
+        // rounds is unknown, not an average of the few that survived. Without this a
+        // single round in an hour of downtime renders as a perfectly healthy hour.
+        var expected = archive.StepSeconds / StepSeconds;
+        if (sent == 0 || present * 2 < expected)
         {
+            ClearSlot(archive, bucketIndex);
             return;
         }
 
-        WriteSlot(archive, bucketIndex, sent, lost, Quantiles.Average(vectors), Jitter.Average(jitters));
+        WriteSlot(
+            archive,
+            bucketIndex,
+            sent,
+            lost,
+            Quantiles.Average(vectors),
+            Jitter.Average(jitters),
+            Quantiles.AverageMedian(medians));
+    }
+
+    /// <summary>Marks a consolidated slot unknown, for a bucket that no longer qualifies.</summary>
+    private void ClearSlot(ArchiveInfo archive, long slotIndex)
+    {
+        var position = archive.Offset + ((slotIndex % archive.SlotCount) * SlotSize);
+        Array.Clear(_slotBuffer);
+        BinaryPrimitives.WriteInt64LittleEndian(_slotBuffer, EmptySlot);
+        _stream.Seek(position, SeekOrigin.Begin);
+        _stream.Write(_slotBuffer);
     }
 
     private void WriteSlot(
@@ -319,13 +392,15 @@ public sealed class RoundRobinFile : IDisposable
         int sent,
         int lost,
         float[] quantiles,
-        float jitter)
+        float jitter,
+        float median)
     {
         var position = archive.Offset + ((slotIndex % archive.SlotCount) * SlotSize);
         BinaryPrimitives.WriteInt64LittleEndian(_slotBuffer, slotIndex);
         BinaryPrimitives.WriteInt32LittleEndian(_slotBuffer.AsSpan(8), sent);
         BinaryPrimitives.WriteInt32LittleEndian(_slotBuffer.AsSpan(12), lost);
-        BinaryPrimitives.WriteSingleLittleEndian(_slotBuffer.AsSpan(16), jitter);
+        BinaryPrimitives.WriteSingleLittleEndian(_slotBuffer.AsSpan(JitterOffset), jitter);
+        BinaryPrimitives.WriteSingleLittleEndian(_slotBuffer.AsSpan(MedianOffset), median);
         for (var i = 0; i < Sample.QuantileCount; i++)
         {
             BinaryPrimitives.WriteSingleLittleEndian(_slotBuffer.AsSpan(QuantileOffset + (i * 4)), quantiles[i]);
@@ -373,7 +448,8 @@ public sealed class RoundRobinFile : IDisposable
             Sent = BinaryPrimitives.ReadInt32LittleEndian(_slotBuffer.AsSpan(8)),
             Lost = BinaryPrimitives.ReadInt32LittleEndian(_slotBuffer.AsSpan(12)),
             Quantiles = quantiles,
-            Jitter = BinaryPrimitives.ReadSingleLittleEndian(_slotBuffer.AsSpan(16)),
+            Jitter = BinaryPrimitives.ReadSingleLittleEndian(_slotBuffer.AsSpan(JitterOffset)),
+            MedianValue = BinaryPrimitives.ReadSingleLittleEndian(_slotBuffer.AsSpan(MedianOffset)),
         };
     }
 
@@ -427,6 +503,33 @@ public sealed class RoundRobinFile : IDisposable
         }
 
         return results;
+    }
+
+    /// <summary>
+    /// Finds the newest slot index already stored, so the monotonicity guard survives
+    /// a restart rather than resetting and allowing one backwards write.
+    /// </summary>
+    private void RecoverNewestSlot()
+    {
+        var archive = Archives[0];
+        var newest = long.MinValue;
+
+        for (var slot = 0; slot < archive.SlotCount; slot++)
+        {
+            _stream.Seek(archive.Offset + ((long)slot * SlotSize), SeekOrigin.Begin);
+            if (_stream.Read(_slotBuffer, 0, SlotSize) != SlotSize)
+            {
+                break;
+            }
+
+            var storedIndex = BinaryPrimitives.ReadInt64LittleEndian(_slotBuffer);
+            if (storedIndex != EmptySlot)
+            {
+                newest = Math.Max(newest, storedIndex);
+            }
+        }
+
+        _newestSlotIndex = newest;
     }
 
     /// <summary>Returns the most recent sample within the base archive, if there is one.</summary>

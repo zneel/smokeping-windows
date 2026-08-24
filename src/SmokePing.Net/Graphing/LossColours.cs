@@ -69,6 +69,14 @@ public static class LossColours
         return bands;
     }
 
+    /// <summary>
+    /// Colour for a loss fraction, scaled to the configured round size. Consolidated
+    /// buckets cover several rounds, so the fraction is the portable quantity: the
+    /// scale itself is always the one the legend prints.
+    /// </summary>
+    public static string ForLossFraction(double lossFraction, int pings) =>
+        ForLoss((int)Math.Round(Math.Clamp(lossFraction, 0, 1) * pings), pings);
+
     /// <summary>Colour for a round in which <paramref name="lost"/> of <paramref name="pings"/> probes were lost.</summary>
     public static string ForLoss(int lost, int pings)
     {
@@ -140,17 +148,19 @@ public static class LossColours
     {
         if (saturation == 0)
         {
-            var grey = (int)Math.Round(lightness * 255);
+            var grey = (int)(lightness * 255);
             return (grey, grey, grey);
         }
 
         var q = lightness < 0.5 ? lightness * (1 + saturation) : lightness + saturation - (lightness * saturation);
         var p = (2 * lightness) - q;
 
+        // Truncated, not rounded: the original formats with sprintf "%.2x", and
+        // rounding shifts several palette entries by one unit per channel.
         return (
-            (int)Math.Round(HueToChannel(p, q, hue + (1.0 / 3.0)) * 255),
-            (int)Math.Round(HueToChannel(p, q, hue) * 255),
-            (int)Math.Round(HueToChannel(p, q, hue - (1.0 / 3.0)) * 255));
+            (int)(HueToChannel(p, q, hue + (1.0 / 3.0)) * 255),
+            (int)(HueToChannel(p, q, hue) * 255),
+            (int)(HueToChannel(p, q, hue - (1.0 / 3.0)) * 255));
     }
 
     private static double HueToChannel(double p, double q, double t)
@@ -183,8 +193,19 @@ public static class LossColours
         return p;
     }
 
-    private static string DisplayRange(int from, int to, int pings) =>
-        from == to
-            ? string.Create(CultureInfo.InvariantCulture, $"{from}/{pings}")
-            : string.Create(CultureInfo.InvariantCulture, $"{from}-{to}/{pings}");
+    /// <summary>
+    /// Labels a band the way the original does: bare numbers, with only the
+    /// everything-was-lost band spelled out as "N/N".
+    /// </summary>
+    private static string DisplayRange(int from, int to, int pings)
+    {
+        if (to >= pings)
+        {
+            return string.Create(CultureInfo.InvariantCulture, $"{pings}/{pings}");
+        }
+
+        return from == to
+            ? from.ToString(CultureInfo.InvariantCulture)
+            : string.Create(CultureInfo.InvariantCulture, $"{from}-{to}");
+    }
 }

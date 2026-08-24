@@ -199,44 +199,104 @@ public sealed class AlertPattern
             return false;
         }
 
-        // Walk both lists from the newest entry backwards; gap tokens try every
-        // allowed length, which is the backtracking upstream expresses as nested loops.
-        return MatchFrom(history, _tokens.Count - 1, history.Count - 1, MinimumLength);
+        var gaps = _tokens.OfType<GapToken>().ToList();
+        if (gaps.Count == 0)
+        {
+            return MatchesWith(history, []);
+        }
+
+        return SearchGaps(history, gaps, new int[gaps.Count], 0, 0);
     }
 
-    private bool MatchFrom(IReadOnlyList<Reading> history, int tokenIndex, int readingIndex, int remainingFixed)
+    /// <summary>
+    /// Enumerates the gap lengths, reproducing the original's bounds exactly.
+    ///
+    /// Those bounds are narrower than the documentation suggests. The original's loop
+    /// is <c>for(i=0; i &lt; min(maxlength - consumed, imax); i++)</c> with
+    /// <c>imax = min(history - minlength, N)</c>: the comparison is strict, and the
+    /// running total of earlier gaps is subtracted from a limit the loop bound did not
+    /// include. So <c>*12*</c> between two tests over a fourteen-reading history
+    /// tolerates six intervening readings, not twelve, and a gap pattern cannot match
+    /// a history exactly as long as its own fixed tokens.
+    ///
+    /// That is odd, and it contradicts the original's own manual page, which says
+    /// <c>*X*</c> ignores up to X values. It is reproduced deliberately: a rule carried
+    /// over from an existing installation has to fire on the same rounds here, and
+    /// alerting differently would be worse than alerting oddly.
+    /// </summary>
+    private bool SearchGaps(
+        IReadOnlyList<Reading> history,
+        IReadOnlyList<GapToken> gaps,
+        int[] lengths,
+        int gapIndex,
+        int consumed)
     {
-        if (tokenIndex < 0)
+        if (gapIndex == gaps.Count)
         {
-            return true;
+            return MatchesWith(history, lengths);
         }
 
-        var token = _tokens[tokenIndex];
+        var available = Math.Min(history.Count - MinimumLength, gaps[gapIndex].MaxLength);
+        var bound = Math.Min(MaximumLength - consumed, available);
 
-        if (token is GapToken gap)
+        for (var length = 0; length < bound; length++)
         {
-            // A gap may consume no more readings than are left once the remaining
-            // fixed tokens have taken their share.
-            var available = readingIndex + 1 - remainingFixed;
-            var maximum = Math.Min(gap.MaxLength, Math.Max(available, 0));
-            for (var consumed = 0; consumed <= maximum; consumed++)
+            // The original tests the same limit twice: once as the loop bound above,
+            // and once afterwards with the gap length itself also subtracted. The
+            // second test is the binding one, and it halves the usable gap.
+            if (2 * length >= MaximumLength - consumed)
             {
-                if (MatchFrom(history, tokenIndex - 1, readingIndex - consumed, remainingFixed))
-                {
-                    return true;
-                }
+                break;
             }
 
-            return false;
+            lengths[gapIndex] = length;
+            if (SearchGaps(history, gaps, lengths, gapIndex + 1, consumed + length))
+            {
+                return true;
+            }
         }
 
-        if (readingIndex < 0)
+        return false;
+    }
+
+    /// <summary>
+    /// Tests the comparison tokens for one choice of gap lengths. The window is the
+    /// tail of the history, so the last comparison token always lands on the newest
+    /// reading.
+    /// </summary>
+    private bool MatchesWith(IReadOnlyList<Reading> history, IReadOnlyList<int> gapLengths)
+    {
+        var span = MinimumLength;
+        foreach (var length in gapLengths)
+        {
+            span += length;
+        }
+
+        var index = history.Count - span;
+        if (index < 0)
         {
             return false;
         }
 
-        return token.Matches(history[readingIndex]) &&
-               MatchFrom(history, tokenIndex - 1, readingIndex - 1, remainingFixed - 1);
+        var gap = 0;
+
+        foreach (var token in _tokens)
+        {
+            if (token is GapToken)
+            {
+                index += gapLengths[gap++];
+                continue;
+            }
+
+            if (index >= history.Count || !token.Matches(history[index]))
+            {
+                return false;
+            }
+
+            index++;
+        }
+
+        return true;
     }
 
     private interface IToken

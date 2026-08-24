@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using SmokePing.Net.Alerting;
 
@@ -57,6 +58,11 @@ public static class ConfigLoader
         PropertyNameCaseInsensitive = true,
         ReadCommentHandling = JsonCommentHandling.Skip,
         AllowTrailingCommas = true,
+
+        // A misspelled or mistranslated setting must be an error. Silently falling
+        // back to the default is how a target ends up measured with settings nobody
+        // chose, and nothing in the output would ever say so.
+        UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
     };
 
     /// <summary>Settings applied when neither the target nor the defaults section specifies one.</summary>
@@ -164,6 +170,13 @@ public static class ConfigLoader
             {
                 throw new ConfigurationException($"Alert '{alert.Name}' is invalid: {ex.Message}", ex);
             }
+
+            if (alerts[alert.Name].Pattern.MaximumLength > AlertEngine.MaximumHistoryLength)
+            {
+                throw new ConfigurationException(
+                    $"Alert '{alert.Name}' spans {alerts[alert.Name].Pattern.MaximumLength} rounds, " +
+                    $"more than the {AlertEngine.MaximumHistoryLength} kept per target; it could never match.");
+            }
         }
 
         return alerts;
@@ -194,6 +207,11 @@ public static class ConfigLoader
         if (!seenIds.Add(id))
         {
             throw new ConfigurationException($"Target '{id}' is defined more than once.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(node.Host))
+        {
+            ValidateHost(id, node.Host);
         }
 
         var settings = Merge(inherited, node);
@@ -227,6 +245,53 @@ public static class ConfigLoader
         return menuNode;
     }
 
+    /// <summary>
+    /// Rejects host forms this port does not implement. Upstream accepts DYNAMIC, a
+    /// list of /target/paths for a multi-host graph, and a ~slave suffix; measuring
+    /// any of them here would fail every round and look exactly like the target being
+    /// down, so they are refused at load time with an explanation instead.
+    /// </summary>
+    private static void ValidateHost(string id, string host)
+    {
+        if (host.StartsWith('%') || host.EndsWith('%'))
+        {
+            if (!Probes.HostResolver.IsToken(host))
+            {
+                throw new ConfigurationException(
+                    $"Target '{id}': '{host}' is not a host token this version understands. " +
+                    $"Supported tokens: {string.Join(", ", Probes.HostResolver.Tokens)}.");
+            }
+
+            return;
+        }
+
+        if (host.StartsWith("DYNAMIC", StringComparison.Ordinal))
+        {
+            throw new ConfigurationException(
+                $"Target '{id}': DYNAMIC hosts are not supported. They need the CGI that lets a " +
+                "remote machine register its own address, which this port does not implement.");
+        }
+
+        if (host.StartsWith('/'))
+        {
+            throw new ConfigurationException(
+                $"Target '{id}': multi-host targets (a list of /target/paths) are not supported. " +
+                "Give this target a host of its own.");
+        }
+
+        if (host.Contains('~', StringComparison.Ordinal))
+        {
+            throw new ConfigurationException(
+                $"Target '{id}': the ~slave suffix in '{host}' is not supported; " +
+                "this port has no master/slave mode.");
+        }
+
+        if (host.Contains(' ', StringComparison.Ordinal))
+        {
+            throw new ConfigurationException($"Target '{id}': '{host}' is not a single host name or address.");
+        }
+    }
+
     private static MeasuredTarget BuildTarget(
         string id,
         string title,
@@ -244,9 +309,31 @@ public static class ConfigLoader
             throw new ConfigurationException($"Target '{id}': step must be at least 10 seconds.");
         }
 
-        if (pings < 1)
+        // Upstream requires three, and with fewer there is no spread to draw: the
+        // smoke needs at least three probes before it has any shape.
+        if (pings < 3)
         {
-            throw new ConfigurationException($"Target '{id}': pings must be at least 1.");
+            throw new ConfigurationException($"Target '{id}': pings must be at least 3.");
+        }
+
+        if (settings.TimeoutMs is < 1 or > 300_000)
+        {
+            throw new ConfigurationException($"Target '{id}': timeoutMs must be between 1 and 300000.");
+        }
+
+        if (settings.PingIntervalMs is < 0 or > 300_000)
+        {
+            throw new ConfigurationException($"Target '{id}': pingIntervalMs must be between 0 and 300000.");
+        }
+
+        if (settings.Port is < 1 or > 65535)
+        {
+            throw new ConfigurationException($"Target '{id}': port must be between 1 and 65535.");
+        }
+
+        if (settings.PacketSize is < 12 or > 64000)
+        {
+            throw new ConfigurationException($"Target '{id}': packetSize must be between 12 and 64000.");
         }
 
         // The whole round has to fit inside one step, otherwise rounds would overlap.

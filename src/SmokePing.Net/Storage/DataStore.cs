@@ -16,8 +16,9 @@ public sealed class DataStore : IDisposable
     /// installation: with the default 300s step, 100 days at full resolution, 400 days
     /// at one hour and 1200 days at twelve hours - about 2.5 MB per target, forever.
     ///
-    /// Upstream also keeps separate MIN and MAX archives for the coarser tiers; the
-    /// stored quantiles already carry both, so they are not needed here.
+    /// Upstream also creates separate MIN and MAX archives for the coarser tiers, but
+    /// none of its own graphs ever read them - every DEF in the original fetches with
+    /// AVERAGE - so they are not reproduced here.
     /// </summary>
     public static readonly (int Multiplier, int SlotCount)[] ArchivePlan =
     [

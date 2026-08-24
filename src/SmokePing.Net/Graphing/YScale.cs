@@ -25,6 +25,15 @@ public sealed class YScale
     /// <summary>False when no round in the period produced a measurement.</summary>
     public bool HasData { get; }
 
+    /// <summary>
+    /// Builds the axis for a period.
+    ///
+    /// The scale follows the highest <em>median</em>, not the slowest probe, and that
+    /// is deliberate - it is what the original does. A single 400ms outlier against a
+    /// steady 20ms median would otherwise rescale the whole graph and squash the line
+    /// everyone actually reads into the bottom few pixels. Smoke above the top is
+    /// clipped to the frame instead, which is also what the original does.
+    /// </summary>
     public static YScale For(IReadOnlyList<Sample> samples, int pixels)
     {
         ArgumentNullException.ThrowIfNull(samples);
@@ -34,18 +43,16 @@ public sealed class YScale
 
         foreach (var sample in samples)
         {
-            // The top quantile is the slowest probe of the round: the graph must fit it.
-            var top = sample.Quantiles[Sample.QuantileCount - 1];
-            if (!float.IsNaN(top))
+            if (sample.Median is { } median)
             {
                 hasData = true;
-                peak = Math.Max(peak, top);
+                peak = Math.Max(peak, median);
             }
         }
 
-        // Leave headroom so the smoke never touches the frame, and keep a sane floor
-        // for targets that answer in well under a millisecond.
-        var maximum = hasData ? NiceCeiling(peak * 1.1) : 10.0;
+        // Headroom above the highest median, matching the original's 1.2 factor, with
+        // a sane floor for targets that answer in well under a millisecond.
+        var maximum = hasData ? peak * 1.2 : 10.0;
         if (maximum <= 0)
         {
             maximum = 1.0;
@@ -66,7 +73,7 @@ public sealed class YScale
     }
 
     /// <summary>Rounds up to 1, 2, 2.5 or 5 times a power of ten.</summary>
-    private static double NiceCeiling(double value)
+    private static double NiceStep(double value)
     {
         if (value <= 0)
         {
@@ -88,13 +95,18 @@ public sealed class YScale
         return nice * magnitude;
     }
 
+    /// <summary>
+    /// Round tick values below the maximum. The axis top itself is not rounded - it
+    /// tracks the data the way the original's rigid limit does - so the topmost tick
+    /// usually sits a little below the frame.
+    /// </summary>
     private static IReadOnlyList<float> BuildTicks(double maximum)
     {
         const int TargetTicks = 5;
-        var step = NiceCeiling(maximum / TargetTicks);
+        var step = NiceStep(maximum / TargetTicks);
         var ticks = new List<float>();
 
-        for (var value = step; value <= maximum + (step / 1000); value += step)
+        for (var value = step; value <= maximum; value += step)
         {
             ticks.Add((float)value);
         }

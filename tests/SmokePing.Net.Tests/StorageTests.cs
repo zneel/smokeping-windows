@@ -10,31 +10,83 @@ public static class StorageTests
     {
         runner.Add("Quantiles: full round produces min, median and max", () =>
         {
-            var (sent, lost, quantiles) = Quantiles.Compute([10.0, 20.0, 30.0, 40.0, 50.0]);
+            var (sent, lost, median, quantiles) = Quantiles.Compute([10.0, 20.0, 30.0, 40.0, 50.0]);
 
             Assert.Equal(5, sent, "all probes counted as sent");
             Assert.Equal(0, lost, "nothing was lost");
+            Assert.Close(30, median, 0.001, "the median is the middle probe");
             Assert.Close(10, quantiles[0], 0.001, "0% quantile is the fastest probe");
-            Assert.Close(30, quantiles[Sample.MedianIndex], 0.001, "50% quantile is the median");
             Assert.Close(50, quantiles[Sample.QuantileCount - 1], 0.001, "100% quantile is the slowest probe");
         });
 
-        runner.Add("Quantiles: lost probes are excluded from the distribution", () =>
+        runner.Add("Quantiles: the median is the original's order statistic, not interpolated", () =>
         {
-            var (sent, lost, quantiles) = Quantiles.Compute([10.0, null, 30.0, null]);
+            // Twenty probes of 1..20ms. The original takes $times[int(20/2)], the
+            // eleventh smallest, which is 11 - not the 10.5 an interpolated
+            // fiftieth percentile would give.
+            var probes = Enumerable.Range(1, 20).Select(i => (double?)i).ToList();
+
+            Assert.Close(11, Quantiles.Compute(probes).Median, 0.001, "the upper middle value wins");
+
+            // An odd count has a true middle.
+            Assert.Close(3, Quantiles.Compute([1.0, 2.0, 3.0, 4.0, 5.0]).Median, 0.001, "the middle of five");
+        });
+
+        runner.Add("Quantiles: lost probes narrow the distribution rather than being ignored", () =>
+        {
+            // The original centres the received probes in the round and pads both ends
+            // with unknowns, which is what makes the smoke band shrink as loss rises.
+            var (sent, lost, median, quantiles) = Quantiles.Compute([10.0, null, 30.0, null]);
 
             Assert.Equal(4, sent, "lost probes still count as sent");
             Assert.Equal(2, lost, "two probes were lost");
-            Assert.Close(10, quantiles[0], 0.001, "minimum comes from the surviving probes");
-            Assert.Close(30, quantiles[Sample.QuantileCount - 1], 0.001, "maximum comes from the surviving probes");
+            Assert.Close(30, median, 0.001, "the median still comes from what came back");
+
+            var known = quantiles.Count(q => !float.IsNaN(q));
+            Assert.True(known < Sample.QuantileCount, $"half the round was lost, so the band narrows ({known} known)");
+        });
+
+        runner.Add("Quantiles: a clean round fills the whole band", () =>
+        {
+            var (_, _, _, quantiles) = Quantiles.Compute([10.0, 20.0, 30.0, 40.0, 50.0]);
+
+            Assert.Equal(
+                Sample.QuantileCount,
+                quantiles.Count(q => !float.IsNaN(q)),
+                "nothing was lost, so every quantile is known");
+        });
+
+        runner.Add("Quantiles: heavier loss narrows the band further", () =>
+        {
+            int Known(int received, int sent)
+            {
+                var probes = new List<double?>();
+                for (var i = 0; i < received; i++)
+                {
+                    probes.Add(10.0 + i);
+                }
+
+                while (probes.Count < sent)
+                {
+                    probes.Add(null);
+                }
+
+                return Quantiles.Compute(probes).Quantiles.Count(q => !float.IsNaN(q));
+            }
+
+            var light = Known(18, 20);
+            var heavy = Known(4, 20);
+
+            Assert.True(heavy < light, $"18/20 gives {light} bands, 4/20 gives {heavy}");
         });
 
         runner.Add("Quantiles: a total loss yields no distribution at all", () =>
         {
-            var (sent, lost, quantiles) = Quantiles.Compute([null, null, null]);
+            var (sent, lost, median, quantiles) = Quantiles.Compute([null, null, null]);
 
             Assert.Equal(3, sent, "all probes were sent");
             Assert.Equal(3, lost, "all probes were lost");
+            Assert.IsNaN(median, "and no median");
             foreach (var q in quantiles)
             {
                 Assert.IsNaN(q, "a round with no answers has no round trip times");
@@ -49,7 +101,8 @@ public static class StorageTests
                 Quantiles.FromSamples([30.0]),
             ]);
 
-            Assert.Close(20, averaged[Sample.MedianIndex], 0.001, "NaN rows must not drag the average down");
+            Assert.Close(20, averaged[0], 0.001, "NaN rows must not drag the average down");
+            Assert.Close(20, Quantiles.AverageMedian([10f, float.NaN, 30f]), 0.001, "and the same for medians");
         });
 
         runner.Add("Jitter: it measures variation between consecutive probes", () =>
@@ -103,10 +156,10 @@ public static class StorageTests
             using var directory = new TempDirectory();
             using var file = RoundRobinFile.OpenOrCreate(directory.File("t.spd"), 60, 10, Plan);
 
-            file.Write(0, 10, 0, Quantiles.FromSamples([10.0]), 2.0f);
-            file.Write(60, 10, 0, Quantiles.FromSamples([10.0]), 4.0f);
-            file.Write(120, 10, 0, Quantiles.FromSamples([10.0]), 6.0f);
-            file.Write(180, 10, 0, Quantiles.FromSamples([10.0]), 8.0f);
+            file.Write(0, 10, 0, Quantiles.FromSamples([10.0]), 2.0f, 10.0f);
+            file.Write(60, 10, 0, Quantiles.FromSamples([10.0]), 4.0f, 10.0f);
+            file.Write(120, 10, 0, Quantiles.FromSamples([10.0]), 6.0f, 10.0f);
+            file.Write(180, 10, 0, Quantiles.FromSamples([10.0]), 8.0f, 10.0f);
 
             Assert.Close(2.0, file.Read(0, 0, 0)[0].JitterMilliseconds!.Value, 0.001, "stored jitter reads back");
             Assert.Close(
@@ -132,7 +185,7 @@ public static class StorageTests
             using var file = RoundRobinFile.OpenOrCreate(directory.File("t.spd"), 60, 5, Plan);
 
             var quantiles = Quantiles.FromSamples([5.0, 6.0, 7.0, 8.0, 9.0]);
-            file.Write(600, 5, 0, quantiles);
+            file.Write(600, 5, 0, quantiles, median: 7.0f);
 
             var samples = file.Read(0, 600, 600);
             Assert.Equal(1, samples.Count, "one slot was requested");
@@ -146,7 +199,7 @@ public static class StorageTests
             using var directory = new TempDirectory();
             using var file = RoundRobinFile.OpenOrCreate(directory.File("t.spd"), 60, 5, Plan);
 
-            file.Write(637, 5, 0, Quantiles.FromSamples([12.0]));
+            file.Write(637, 5, 0, Quantiles.FromSamples([12.0]), median: 12.0f);
 
             var samples = file.Read(0, 600, 600);
             Assert.Equal(600L, samples[0].Timestamp, "637 belongs to the slot that starts at 600");
@@ -158,8 +211,8 @@ public static class StorageTests
             using var directory = new TempDirectory();
             using var file = RoundRobinFile.OpenOrCreate(directory.File("t.spd"), 60, 5, Plan);
 
-            file.Write(600, 5, 0, Quantiles.FromSamples([10.0]));
-            file.Write(780, 5, 0, Quantiles.FromSamples([10.0]));
+            file.Write(600, 5, 0, Quantiles.FromSamples([10.0]), median: 10.0f);
+            file.Write(780, 5, 0, Quantiles.FromSamples([10.0]), median: 10.0f);
 
             var samples = file.Read(0, 600, 780);
             Assert.Equal(4, samples.Count, "four slots span 600 to 780");
@@ -175,7 +228,7 @@ public static class StorageTests
             // 12 slots in the base archive, so writing 20 rounds wraps it.
             for (var i = 0; i < 20; i++)
             {
-                file.Write(i * 60, 5, 0, Quantiles.FromSamples([i + 1.0]));
+                file.Write(i * 60, 5, 0, Quantiles.FromSamples([i + 1.0]), median: i + 1.0f);
             }
 
             var recent = file.Read(0, 19 * 60, 19 * 60);
@@ -192,10 +245,10 @@ public static class StorageTests
             using var file = RoundRobinFile.OpenOrCreate(directory.File("t.spd"), 60, 10, Plan);
 
             // Four 60s rounds make up one 240s bucket: two clean, two with heavy loss.
-            file.Write(0, 10, 0, Quantiles.FromSamples([10.0]));
-            file.Write(60, 10, 0, Quantiles.FromSamples([30.0]));
-            file.Write(120, 10, 5, Quantiles.FromSamples([50.0]));
-            file.Write(180, 10, 5, Quantiles.FromSamples([70.0]));
+            file.Write(0, 10, 0, Quantiles.FromSamples([10.0]), median: 10.0f);
+            file.Write(60, 10, 0, Quantiles.FromSamples([30.0]), median: 30.0f);
+            file.Write(120, 10, 5, Quantiles.FromSamples([50.0]), median: 50.0f);
+            file.Write(180, 10, 5, Quantiles.FromSamples([70.0]), median: 70.0f);
 
             var consolidated = file.Read(1, 0, 0);
             Assert.Equal(1, consolidated.Count, "one coarse bucket covers the four rounds");
@@ -212,7 +265,7 @@ public static class StorageTests
 
             using (var file = RoundRobinFile.OpenOrCreate(path, 60, 5, Plan))
             {
-                file.Write(600, 5, 1, Quantiles.FromSamples([42.0]));
+                file.Write(600, 5, 1, Quantiles.FromSamples([42.0]), median: 42.0f);
             }
 
             using var reopened = RoundRobinFile.OpenOrCreate(path, 60, 5, Plan);
@@ -226,7 +279,7 @@ public static class StorageTests
 
             using (var file = RoundRobinFile.OpenOrCreate(path, 60, 5, Plan))
             {
-                file.Write(600, 5, 0, Quantiles.FromSamples([42.0]));
+                file.Write(600, 5, 0, Quantiles.FromSamples([42.0]), median: 42.0f);
             }
 
             // The step changed in the configuration; the old file cannot be reused.
@@ -237,6 +290,78 @@ public static class StorageTests
             Assert.True(
                 Directory.GetFiles(directory.Path, "*.bak").Length == 1,
                 "the previous database is preserved as a backup");
+        });
+
+        runner.Add("RoundRobinFile: a mostly-empty bucket is not consolidated into a healthy one", () =>
+        {
+            using var directory = new TempDirectory();
+            using var file = RoundRobinFile.OpenOrCreate(directory.File("t.spd"), 60, 10, Plan);
+
+            // One good round in a four-round bucket. Averaging it alone would render
+            // an outage as a perfectly normal period.
+            file.Write(0, 10, 0, Quantiles.FromSamples([10.0]), median: 10.0f);
+
+            Assert.Equal(0, file.Read(1, 0, 0)[0].Sent, "one round in four is not enough to consolidate");
+
+            // A second round reaches half, which is the threshold.
+            file.Write(60, 10, 0, Quantiles.FromSamples([10.0]), median: 10.0f);
+
+            Assert.Equal(20, file.Read(1, 0, 0)[0].Sent, "half the rounds present is enough");
+        });
+
+        runner.Add("RoundRobinFile: a backwards clock step is refused, not written", () =>
+        {
+            using var directory = new TempDirectory();
+            using var file = RoundRobinFile.OpenOrCreate(directory.File("t.spd"), 60, 10, Plan);
+
+            file.Write(600, 10, 0, Quantiles.FromSamples([10.0]), median: 10.0f);
+
+            Assert.Throws<ArgumentOutOfRangeException>(
+                () => file.Write(300, 10, 0, Quantiles.FromSamples([99.0]), median: 99.0f),
+                "an older timestamp would land on live slots and rewrite consolidated history");
+
+            Assert.Close(10.0, file.Read(0, 600, 600)[0].Median!.Value, 0.001, "the newer sample is intact");
+        });
+
+        runner.Add("RoundRobinFile: the clock guard survives a restart", () =>
+        {
+            using var directory = new TempDirectory();
+            var path = directory.File("t.spd");
+
+            using (var file = RoundRobinFile.OpenOrCreate(path, 60, 10, Plan))
+            {
+                file.Write(600, 10, 0, Quantiles.FromSamples([10.0]), median: 10.0f);
+            }
+
+            using var reopened = RoundRobinFile.OpenOrCreate(path, 60, 10, Plan);
+
+            Assert.Throws<ArgumentOutOfRangeException>(
+                () => reopened.Write(300, 10, 0, Quantiles.FromSamples([99.0]), median: 99.0f),
+                "reopening must not reset the high-water mark");
+        });
+
+        runner.Add("RoundRobinFile: an unreadable file is never replaced with an empty one", () =>
+        {
+            using var directory = new TempDirectory();
+            var path = directory.File("t.spd");
+
+            using (var file = RoundRobinFile.OpenOrCreate(path, 60, 10, Plan))
+            {
+                file.Write(600, 10, 0, Quantiles.FromSamples([42.0]), median: 42.0f);
+            }
+
+            // Hold it open exclusively, as a backup agent or a second instance would.
+            using (var exclusive = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None))
+            {
+                Assert.Throws<IOException>(
+                    () => RoundRobinFile.OpenOrCreate(path, 60, 10, Plan),
+                    "a locked database is an error, not a reason to start a new one");
+            }
+
+            Assert.Equal(0, Directory.GetFiles(directory.Path, "*.bak").Length, "and nothing was moved aside");
+
+            using var reopened = RoundRobinFile.OpenOrCreate(path, 60, 10, Plan);
+            Assert.Close(42.0, reopened.Read(0, 600, 600)[0].Median!.Value, 0.001, "the history is still there");
         });
 
         runner.Add("RoundRobinFile: the archive chosen covers the requested span", () =>
@@ -254,7 +379,7 @@ public static class StorageTests
             using var directory = new TempDirectory();
             using var file = RoundRobinFile.OpenOrCreate(directory.File("t.spd"), 60, 5, Plan);
 
-            file.Write(300, 5, 0, Quantiles.FromSamples([11.0]));
+            file.Write(300, 5, 0, Quantiles.FromSamples([11.0]), median: 11.0f);
 
             var latest = file.ReadLatest(420);
             Assert.True(latest is not null, "the earlier round is found");

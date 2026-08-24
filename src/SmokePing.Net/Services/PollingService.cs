@@ -79,15 +79,22 @@ public sealed class PollingService : BackgroundService
                 // Resolved every round rather than once at start-up, so a machine that
                 // moves to a different network starts measuring its new gateway.
                 var measured = ResolveHost(target);
-                var measurements = measured is null
-                    ? new double?[target.Pings]
-                    : await probe.MeasureAsync(measured, stoppingToken).ConfigureAwait(false);
-                var (sent, lost, quantiles) = Quantiles.Compute(measurements);
+                if (measured is null)
+                {
+                    // Nothing was measured, so nothing is recorded. Writing an
+                    // all-lost round would claim the target was unreachable, when in
+                    // fact we never found an address to reach; the original leaves a
+                    // gap in the same situation.
+                    continue;
+                }
+
+                var measurements = await probe.MeasureAsync(measured, stoppingToken).ConfigureAwait(false);
+                var (sent, lost, median, quantiles) = Quantiles.Compute(measurements);
 
                 // Jitter depends on the order the probes came back in, which the
                 // stored quantiles do not preserve, so it is computed here.
                 var jitter = Jitter.Compute(measurements);
-                database.Write(slotStart.Value, sent, lost, quantiles, jitter);
+                database.Write(slotStart.Value, sent, lost, quantiles, jitter, median);
 
                 var sample = new Sample
                 {
@@ -96,6 +103,7 @@ public sealed class PollingService : BackgroundService
                     Lost = lost,
                     Quantiles = quantiles,
                     Jitter = jitter,
+                    MedianValue = median,
                 };
 
                 _logger.LogDebug(

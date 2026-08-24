@@ -18,7 +18,26 @@ for 100 days, hourly for 400 days, twelve-hourly for 1200 days.
 
 **Smoke shading.** The nested bands and their grey ramp use upstream's formula,
 `int(190 / half × (half − i)) + 50`, so the outer, rarer values are lightest and the
-band around the median is darkest.
+band around the median is darkest. Lost probes pad the round at both ends exactly as
+upstream pads `ping1..pingN` with unknowns, so the band narrows as loss rises rather
+than staying full width over fewer and fewer samples.
+
+Because eleven quantiles are stored rather than one value per probe, a 20-ping target
+gets five bands where upstream draws ten, and the ramp runs 205…67 rather than
+221…50. The shape is the same; the shading is coarser.
+
+**Median.** The middle received probe by position, without interpolation — upstream's
+`$times[int($entries/2)]`. For twenty probes timed 1…20 ms that is 11 ms, not the
+10.5 ms an interpolated percentile would give. It is stored in its own right, as
+upstream keeps it as its own data source.
+
+**Consolidation.** Coarse archives apply upstream's xfiles factor: a bucket built from
+fewer than half its rounds is unknown rather than an average of the survivors, so an
+hour containing one round renders as a gap and not as a healthy hour.
+
+**Y axis.** Scaled to the highest median with upstream's 1.2 headroom, rigid, with
+smoke above the top clipped to the frame. A single slow probe does not rescale the
+graph and squash the median line.
 
 **Loss colours.** The exact palette and thresholds:
 
@@ -37,10 +56,24 @@ For short rounds several thresholds collapse onto the same count; as upstream, t
 later colour wins, which keeps a totally dead round dark red.
 
 **Alert patterns.** The full detector grammar — comparisons, ranges, `*N*` gaps, `==U`,
-`==S`, `==*` — anchored at the newest reading, with the same backtracking over gap
-lengths. Loss in percent, rtt in milliseconds. Edge triggering and rule priority
-behave as upstream's `edgetrigger` and `priority` do, and the alert history starts
-with the same synthetic `S` marker.
+`==S`, `==*` — anchored at the newest reading. Loss in percent, rtt in milliseconds.
+Edge triggering and rule priority behave as upstream's `edgetrigger` and `priority`
+do, including `edgetrigger` defaulting to off, and the alert history starts with the
+same synthetic `S` marker.
+
+The gap bounds are reproduced exactly, quirk and all. Upstream tests its gap limit
+twice — once as a loop bound, once afterwards with the gap length itself subtracted —
+so `*12*` between two tests tolerates six intervening rounds over a fourteen-round
+history, not twelve, and a gap pattern cannot match a history exactly as long as its
+own fixed tokens. That contradicts upstream's own manual page, which says `*X*`
+ignores up to X values. It is reproduced anyway: a rule carried over from an existing
+installation has to fire on the same rounds here. This was established by running
+upstream's own generated matchers against this implementation over tens of thousands
+of paired inputs, not by reading the Perl.
+
+The retained history is sized from the longest pattern in use, as upstream's
+`fetchlength` is, and a pattern longer than the maximum is rejected at load time
+rather than silently never matching.
 
 **Graph periods.** The detail page shows upstream's four: 3 hours, 30 hours, 10 days,
 360 days. Overviews use 10 hours.
@@ -88,8 +121,25 @@ client, no mail templates and no `smokemail`.
 
 **Not implemented.** Master/slave distributed measurement, the CGI and its
 `basepage.html` templating, RRDtool integration, hierarchies, the `Chartlist`
-navigation cache, matcher plugins (the pattern language covers what the bundled
-matchers do), and remote-triggered graph zooming.
+navigation cache, DYNAMIC hosts, multi-host targets, uptime tracking and its legend
+row, `unison_tolerance`, logarithmic axes, and remote-triggered graph zooming.
+
+**Matcher plugins.** Not implemented, and the pattern language does not substitute for
+them: `CheckLoss`, `CheckLatency` and `ConsecutiveLoss` branch on whether the alert is
+already raised, using a different threshold to clear than to raise, and a pattern has
+no access to that state. `Median`, `Medratio` and `Avgratio` compare windows against
+each other, and `ExpLoss` keeps an exponentially weighted average. None of these can
+be written as a detector pattern.
+
+**Top-N charts.** Upstream ranks on the single most recent round — its `StdDev` sorter
+is the deviation across that round's twenty probes. These rank over a ten hour window
+instead, on the per-round medians. The chart titles match; the quantities do not.
+
+**Configurations that are rejected here.** A host of `DYNAMIC`, a multi-host list of
+`/target/paths`, or a `~slave` suffix is refused at load time rather than measured and
+reported as permanently down. Unknown settings are an error rather than being ignored,
+`pings` must be at least three as upstream requires, and `port`, `packetSize`,
+`timeoutMs` and `pingIntervalMs` are range-checked.
 
 **Web interface.** A single-page application over a JSON API, with server-rendered
 SVG graphs rather than RRDtool PNGs. Graph URLs are stable and embeddable.

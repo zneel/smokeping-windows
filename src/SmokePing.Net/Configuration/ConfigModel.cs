@@ -101,9 +101,11 @@ public sealed class AlertRuleConfig
 
     /// <summary>
     /// When true, notify only on transitions (raised / cleared). When false, notify on
-    /// every round the alert matches.
+    /// every round the alert matches. Defaults to false, as upstream's edgetrigger
+    /// does - a rule that matches five rounds running notifies five times unless it
+    /// says otherwise.
     /// </summary>
-    public bool EdgeTrigger { get; set; } = true;
+    public bool EdgeTrigger { get; set; }
 
     /// <summary>
     /// Lower numbers are evaluated first; once a rule with a priority has notified,

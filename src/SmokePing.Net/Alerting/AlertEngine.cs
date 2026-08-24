@@ -52,8 +52,17 @@ public sealed class CompiledAlertRule
 /// </summary>
 public sealed class AlertEngine
 {
-    /// <summary>Readings retained per target; the longest pattern that can be evaluated.</summary>
-    public const int HistoryLength = 64;
+    /// <summary>Readings retained per target when no rule needs more.</summary>
+    public const int DefaultHistoryLength = 64;
+
+    /// <summary>
+    /// Upper bound on retained readings, and therefore on how far back a pattern may
+    /// look. A pattern longer than this is rejected at load time rather than silently
+    /// never matching.
+    /// </summary>
+    public const int MaximumHistoryLength = 1024;
+
+    private readonly int _historyLength;
 
     private readonly ConcurrentDictionary<string, TargetState> _state = new(StringComparer.OrdinalIgnoreCase);
     private readonly IReadOnlyDictionary<string, CompiledAlertRule> _rules;
@@ -61,7 +70,15 @@ public sealed class AlertEngine
     public AlertEngine(IReadOnlyDictionary<string, CompiledAlertRule> rules)
     {
         _rules = rules ?? throw new ArgumentNullException(nameof(rules));
+
+        // Upstream sizes its history from the longest pattern in play (fetchlength);
+        // keeping a fixed 64 would make a longer pattern quietly impossible to match.
+        var longest = rules.Values.Select(rule => rule.Pattern.MaximumLength).DefaultIfEmpty(0).Max();
+        _historyLength = Math.Clamp(longest, DefaultHistoryLength, MaximumHistoryLength);
     }
+
+    /// <summary>Readings retained per target, sized to the longest configured pattern.</summary>
+    public int HistoryLength => _historyLength;
 
     /// <summary>Alerts currently raised, keyed by "targetId/alertName".</summary>
     public IReadOnlyDictionary<string, AlertEvent> Active { get; } =
@@ -90,7 +107,7 @@ public sealed class AlertEngine
                 .Select(name => _rules.TryGetValue(name, out var rule) ? rule : null)
                 .Where(rule => rule is not null)
                 .Select(rule => rule!)
-                .OrderBy(rule => rule.Config.Priority ?? int.MaxValue)
+                .OrderBy(rule => rule.Config.Priority ?? 0)
                 .ToList();
 
             var prioritisedNotificationSent = false;
@@ -115,6 +132,17 @@ public sealed class AlertEngine
                 }
 
                 state.PreviousMatch[rule.Name] = matched;
+
+                // Tracked before the notification decision: a level-triggered rule
+                // reports nothing on a clean round, but it has still stopped being
+                // active, and leaving it in the set would have the web interface
+                // showing an alert that cleared hours ago.
+                var key = $"{target.Id}/{rule.Name}";
+                var active = (ConcurrentDictionary<string, AlertEvent>)Active;
+                if (!matched)
+                {
+                    active.TryRemove(key, out _);
+                }
 
                 if (what is null)
                 {
@@ -149,15 +177,9 @@ public sealed class AlertEngine
 
                 events.Add(alertEvent);
 
-                var key = $"{target.Id}/{rule.Name}";
-                var active = (ConcurrentDictionary<string, AlertEvent>)Active;
                 if (matched)
                 {
                     active[key] = alertEvent;
-                }
-                else
-                {
-                    active.TryRemove(key, out _);
                 }
             }
         }
@@ -165,9 +187,9 @@ public sealed class AlertEngine
         return events;
     }
 
-    private static void Trim(List<Reading> readings)
+    private void Trim(List<Reading> readings)
     {
-        while (readings.Count > HistoryLength)
+        while (readings.Count > _historyLength)
         {
             readings.RemoveAt(0);
         }

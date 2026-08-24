@@ -28,13 +28,53 @@ public static class AlertTests
             Assert.False(pattern.Matches(Loss(50, 50)), "two readings cannot satisfy three tokens");
         });
 
-        runner.Add("AlertPattern: gaps allow arbitrary readings in between", () =>
+        runner.Add("AlertPattern: gaps allow readings in between, within the original's bounds", () =>
         {
             var pattern = AlertPattern.Compile(">0%,*3*,>0%", "loss");
 
-            Assert.True(pattern.Matches(Loss(5, 5)), "a gap may consume nothing");
-            Assert.True(pattern.Matches(Loss(5, 0, 0, 5)), "a gap absorbs two clean rounds");
+            // The original's gap bound is min(history - fixed tokens, N), tested with a
+            // strict <, so the usable gap is narrower than the N suggests and grows
+            // with the history available. These are the answers the Perl gives.
+            Assert.True(pattern.Matches(Loss(0, 5, 5)), "a gap may consume nothing once there is history to spare");
+            Assert.True(pattern.Matches(Loss(0, 5, 0, 5)), "and one reading with a little more");
             Assert.False(pattern.Matches(Loss(5, 0, 0, 0, 0, 5)), "four clean rounds exceed a gap of three");
+        });
+
+        runner.Add("AlertPattern: a gap pattern cannot match a history of only its fixed tokens", () =>
+        {
+            var pattern = AlertPattern.Compile(">0%,*3*,>0%", "loss");
+
+            // Surprising, and faithful: with history == minimum length the original's
+            // gap loop never runs a single iteration, so the pattern cannot match.
+            Assert.False(pattern.Matches(Loss(5, 5)), "two readings are not enough for a two-token gap pattern");
+        });
+
+        runner.Add("AlertPattern: a gap tolerates fewer rounds than its number suggests", () =>
+        {
+            // The documented example. Over the fourteen readings the pattern itself
+            // spans, *12* tolerates six intervening rounds, not twelve.
+            var pattern = AlertPattern.Compile(">0%,*12*,>0%", "loss");
+
+            List<Reading> WithGap(int clean)
+            {
+                var history = new List<Reading>();
+                for (var i = 0; i < 14 - 2 - clean; i++)
+                {
+                    history.Add(new Reading(0));
+                }
+
+                history.Add(new Reading(5));
+                for (var i = 0; i < clean; i++)
+                {
+                    history.Add(new Reading(0));
+                }
+
+                history.Add(new Reading(5));
+                return history;
+            }
+
+            Assert.True(pattern.Matches(WithGap(6)), "six intervening rounds match");
+            Assert.False(pattern.Matches(WithGap(7)), "seven do not, despite the pattern saying 12");
         });
 
         runner.Add("AlertPattern: the upstream someloss pattern behaves as documented", () =>

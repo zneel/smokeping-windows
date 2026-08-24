@@ -73,7 +73,7 @@ public sealed class AlertNotifier
 
         if (!string.IsNullOrWhiteSpace(rule.Command))
         {
-            RunCommand(alertEvent, rule.Command);
+            RunCommand(alertEvent, rule);
         }
     }
 
@@ -119,8 +119,10 @@ public sealed class AlertNotifier
     /// Runs the configured command with the same argument list upstream passes:
     /// name, target, loss history, rtt history, host and the raise/clear flag.
     /// </summary>
-    private void RunCommand(AlertEvent alertEvent, string command)
+    private void RunCommand(AlertEvent alertEvent, Configuration.AlertRuleConfig rule)
     {
+        var command = rule.Command!;
+
         try
         {
             var startInfo = new ProcessStartInfo
@@ -135,7 +137,13 @@ public sealed class AlertNotifier
             startInfo.ArgumentList.Add("loss: " + string.Join(", ", alertEvent.LossHistory));
             startInfo.ArgumentList.Add("rtt: " + string.Join(", ", alertEvent.RttHistory));
             startInfo.ArgumentList.Add(alertEvent.Host);
-            startInfo.ArgumentList.Add(alertEvent.IsRaised ? "1" : "0");
+
+            // Upstream passes the raise/clear flag only for edge-triggered rules; a
+            // level-triggered one gets five arguments, not six.
+            if (rule.EdgeTrigger)
+            {
+                startInfo.ArgumentList.Add(alertEvent.IsRaised ? "1" : "0");
+            }
 
             using var process = Process.Start(startInfo);
             if (process is null)
