@@ -15,7 +15,7 @@ jobs:
 
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: "8.0.x"
+          dotnet-version: "10.0.x"
 
       - name: Build daemon and tests
         run: dotnet build src/SmokePing.Net/SmokePing.Net.csproj tests/SmokePing.Net.Tests/SmokePing.Net.Tests.csproj --configuration Release
@@ -26,8 +26,7 @@ jobs:
       - name: Validate the sample configuration
         run: dotnet run --project src/SmokePing.Net --configuration Release --no-build -- --config config/smokeping.json --check
 
-  # The desktop client is Windows only, and this is the job that proves the Windows
-  # service host and the GDI+ renderer compile against the real targeting packs.
+  # The daemon targets Windows first, so it is also built and tested there.
   windows:
     runs-on: windows-latest
     steps:
@@ -35,7 +34,7 @@ jobs:
 
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: "8.0.x"
+          dotnet-version: "10.0.x"
 
       - name: Build the whole solution
         run: dotnet build SmokePing.Net.sln --configuration Release
@@ -43,10 +42,8 @@ jobs:
       - name: Run tests
         run: dotnet run --project tests/SmokePing.Net.Tests --configuration Release --no-build
 
-      - name: Publish the daemon and the desktop client
-        run: |
-          dotnet publish src/SmokePing.Net/SmokePing.Net.csproj --configuration Release --output publish/daemon
-          dotnet publish src/SmokePing.Net.Desktop/SmokePing.Net.Desktop.csproj --configuration Release --output publish/desktop
+      - name: Publish the daemon
+        run: dotnet publish src/SmokePing.Net/SmokePing.Net.csproj --configuration Release --output publish/daemon
 
       - uses: actions/upload-artifact@v4
         with:
