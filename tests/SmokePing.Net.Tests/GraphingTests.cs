@@ -69,8 +69,10 @@ public static class GraphingTests
             Assert.Equal(0.0, scale.ToPixels(double.NaN), "NaN does not escape onto the canvas");
         });
 
-        runner.Add("GraphStatistics: summary figures match the samples", () =>
+        runner.Add("GraphStatistics: the round trip figures describe the median series", () =>
         {
+            // Medians of 20, 30 and 40; the figures describe those, not the spread of
+            // individual probes, which is what the smoke already shows.
             var stats = GraphStatistics.Compute([
                 SampleAt(0, 10, 30),
                 SampleAt(60, 20, 40),
@@ -78,10 +80,34 @@ public static class GraphingTests
             ]);
 
             Assert.True(stats.HasData, "three rounds have data");
-            Assert.Close(10, stats.Minimum, 0.001, "the minimum is the fastest probe seen");
-            Assert.Close(50, stats.Maximum, 0.001, "the maximum is the slowest probe seen");
+            Assert.Close(30, stats.MedianAverage, 0.001, "the average of the per-round medians");
+            Assert.Close(20, stats.MedianMinimum, 0.001, "the lowest per-round median");
+            Assert.Close(40, stats.MedianMaximum, 0.001, "the highest per-round median");
+            Assert.Close(40, stats.MedianNow, 0.001, "the most recent per-round median");
             Assert.Equal(3, stats.RoundsWithData, "all three rounds counted");
-            Assert.Close(0, stats.LossPercent, 0.001, "nothing was lost");
+            Assert.Close(0, stats.LossAverage, 0.001, "nothing was lost");
+        });
+
+        runner.Add("GraphStatistics: loss is reported as average, extremes and current", () =>
+        {
+            var stats = GraphStatistics.Compute([
+                SampleWithLoss(0, 20, 0),
+                SampleWithLoss(300, 20, 10),
+                SampleWithLoss(600, 20, 2),
+            ]);
+
+            Assert.Close(20, stats.LossAverage, 0.01, "the mean of 0%, 50% and 10%");
+            Assert.Close(50, stats.LossMaximum, 0.01, "the worst round");
+            Assert.Close(0, stats.LossMinimum, 0.01, "the best round");
+            Assert.Close(10, stats.LossNow, 0.01, "the most recent round");
+        });
+
+        runner.Add("GraphStatistics: a period with no variation has no noise to divide by", () =>
+        {
+            var stats = GraphStatistics.Compute([SampleAt(0, 20, 20), SampleAt(300, 20, 20)]);
+
+            Assert.Close(0, stats.StandardDeviation, 0.001, "identical rounds do not vary");
+            Assert.Close(0, stats.SignalToNoise, 0.001, "and the ratio does not divide by zero");
         });
 
         runner.Add("GraphStatistics: loss is counted even when nothing answered", () =>
@@ -91,7 +117,7 @@ public static class GraphingTests
             ]);
 
             Assert.False(stats.HasData, "no round trip times were recorded");
-            Assert.Close(100, stats.LossPercent, 0.001, "but the loss is still reported");
+            Assert.Close(100, stats.LossAverage, 0.001, "but the loss is still reported");
         });
 
         runner.Add("SmokeGraphRenderer: the output is well-formed SVG", () =>
@@ -193,9 +219,12 @@ public static class GraphingTests
             var full = Render(BuildSamples(12));
             var compact = Render(BuildSamples(12), compact: true);
 
-            Assert.Contains(full, "probes lost per round", "the full graph carries a legend");
+            Assert.Contains(full, "loss color:", "the full graph carries a legend");
+            Assert.Contains(full, "median rtt:", "with the round trip figures");
+            Assert.Contains(full, "packet loss:", "and the loss figures");
+            Assert.Contains(full, "probe:", "and what took the measurements");
             Assert.False(
-                compact.Contains("probes lost per round", StringComparison.Ordinal),
+                compact.Contains("loss color:", StringComparison.Ordinal),
                 "the overview graph does not");
         });
 
@@ -302,6 +331,15 @@ public static class GraphingTests
         Enumerable.Range(0, count)
             .Select(i => SampleAt(i * 300, 10 + (i % 5), 40 + (i % 7)))
             .ToList();
+
+    /// <summary>A round with a given number of probes lost, all answers at 20ms.</summary>
+    private static Sample SampleWithLoss(long timestamp, int sent, int lost) => new()
+    {
+        Timestamp = timestamp,
+        Sent = sent,
+        Lost = lost,
+        Quantiles = Quantiles.FromSamples(Enumerable.Repeat(20.0, sent - lost).ToList()),
+    };
 
     /// <summary>A round whose probes are spread evenly between two values.</summary>
     private static Sample SampleAt(long timestamp, double fastest, double slowest)

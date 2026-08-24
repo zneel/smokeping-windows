@@ -1,0 +1,109 @@
+name: release
+
+# Cutting a release is deliberate: push a v* tag and this builds the binaries and
+# publishes them. Nothing is released from an ordinary push to a branch.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build and release"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Work out the version
+        id: version
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "number=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      # Nothing ships without the tests passing.
+      - name: Run tests
+        run: dotnet run --project tests/SmokePing.Net.Tests --configuration Release
+
+      - name: Validate the sample configuration
+        run: dotnet run --project src/SmokePing.Net --configuration Release -- --config config/smokeping.json --check
+
+      # Self-contained single-file builds: a portable binary that runs on a machine
+      # with no .NET installed at all.
+      - name: Publish portable binaries
+        run: |
+          set -eu
+          VERSION="${{ steps.version.outputs.number }}"
+          for RID in win-x64 win-arm64 linux-x64; do
+            dotnet publish src/SmokePing.Net/SmokePing.Net.csproj \
+              --configuration Release \
+              --runtime "$RID" \
+              --self-contained true \
+              -p:PublishSingleFile=true \
+              -p:EnableCompressionInSingleFile=true \
+              -p:DebugType=none \
+              -p:Version="$VERSION" \
+              --output "staging/$RID"
+
+            # The sample configuration and the docs travel with the binary so the
+            # download is usable on its own.
+            mkdir -p "staging/$RID/config"
+            cp config/smokeping.json "staging/$RID/config/smokeping.json"
+            cp README.md docs/CONFIGURATION.md docs/COMPATIBILITY.md "staging/$RID/"
+            cp -r scripts "staging/$RID/scripts"
+
+            rm -f "staging/$RID"/*.pdb
+            (cd "staging/$RID" && zip -qr "../../smokeping-net-$VERSION-$RID.zip" .)
+          done
+
+          ls -la *.zip
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          TAG="${{ steps.version.outputs.tag }}"
+
+          cat > notes.md <<'NOTES'
+          SmokePing.NET — latency measurement and smoke graphs for Windows, in C# on .NET 10.
+
+          ### Portable binaries
+
+          Each archive is a single self-contained executable: **no .NET runtime needed**,
+          nothing to install. Unzip it, edit `config/smokeping.json`, and run:
+
+          ```
+          SmokePing.Net.exe --config config\smokeping.json --check
+          SmokePing.Net.exe --config config\smokeping.json
+          ```
+
+          Then open http://localhost:8081.
+
+          To run it as a Windows service, from an elevated PowerShell prompt:
+
+          ```
+          .\scripts\Install-SmokePingService.ps1
+          ```
+
+          | Download | For |
+          | --- | --- |
+          | `win-x64` | Windows on Intel or AMD |
+          | `win-arm64` | Windows on ARM |
+          | `linux-x64` | Linux (ICMP needs `net.ipv4.ping_group_range` or `CAP_NET_RAW`) |
+          NOTES
+
+          gh release create "$TAG" \
+            --title "SmokePing.NET $TAG" \
+            --notes-file notes.md \
+            ./*.zip

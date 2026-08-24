@@ -15,7 +15,7 @@ public sealed class IcmpProbe : ProbeBase
     public override string Name => "icmp";
 
     public override string Describe(MeasuredTarget target) =>
-        $"ICMP Echo Ping ({target.PacketSize} bytes payload, {target.Pings} pings every {target.StepSeconds}s)";
+        $"{target.Pings} ICMP Echo Pings ({target.PacketSize} Bytes) every {target.StepSeconds}s";
 
     protected override async Task<double?> MeasureOnceAsync(MeasuredTarget target, CancellationToken cancellationToken)
     {

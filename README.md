@@ -51,10 +51,31 @@ half a second apart, every five minutes.
   from the full min-max range on the outside to the tightest pair around the median.
   A thin line means a stable connection; a thick cloud means jitter;
 * the **colour of the line** is packet loss: green for a clean round, through blue
-  and purple, to dark red when nothing came back at all.
+  and purple, to dark red when nothing came back at all;
+* rounds that lost probes are also **shaded** across the full height, so an outage is
+  visible without hunting for a change of colour in the line.
+
+Under the graph, the same figures the original prints: round-trip time as average,
+maximum, minimum and current, its standard deviation, packet loss the same four ways,
+the loss colour key, and what took the measurements.
 
 That combination is the whole point of SmokePing: latency, jitter and loss in one
 picture, at a glance.
+
+### Jitter
+
+Alongside the original's figures, each round also records **jitter**: the mean
+absolute difference between the round-trip times of consecutive probes.
+
+This is measured when the probes come back rather than derived afterwards, because it
+is a property of the order they arrived in and the stored distribution does not keep
+that. A round alternating 10ms and 60ms and a round rising smoothly from 10ms to 60ms
+have identical quantiles and completely different jitter. Standard deviation, by
+contrast, describes how the median moved *between* rounds; jitter describes variation
+*within* one.
+
+It appears on the graph legend, in the hover text of each round, in the target
+statistics, in the API, and as a "Top Jitter" chart.
 
 ## Configuration
 

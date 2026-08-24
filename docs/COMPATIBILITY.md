@@ -45,10 +45,24 @@ with the same synthetic `S` marker.
 **Graph periods.** The detail page shows upstream's four: 3 hours, 30 hours, 10 days,
 360 days. Overviews use 10 hours.
 
-**Charts.** Top-N by standard deviation, max round-trip time, loss and median.
+**Legend.** The same labelled rows: `median rtt` with average, maximum, minimum,
+current, standard deviation and the average-over-deviation ratio; `packet loss` the
+same four ways; `loss color`; and `probe` with the description and the end time.
+
+**Charts.** Top-N by standard deviation, max round-trip time, loss and median, plus
+a jitter chart this adds.
 
 **Alert command arguments.** `<name> <target> <loss history> <rtt history> <host>
 [<raised>]`, matching upstream's `|command` recipients.
+
+## What this adds
+
+**Jitter.** Each round records the mean absolute variation between consecutive
+probes, which upstream does not measure. It is stored at measurement time because the
+quantiles cannot reconstruct probe order.
+
+**Loss background on by default.** Upstream has this as `loss_background`, off by
+default; here rounds that lost probes are shaded unless the graph asks otherwise.
 
 ## What differs
 

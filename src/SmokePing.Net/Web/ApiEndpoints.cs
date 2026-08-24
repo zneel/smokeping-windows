@@ -89,6 +89,7 @@ public static partial class ApiEndpoints
                     s.Sent,
                     s.Lost,
                     median = s.Median,
+                    jitter = s.JitterMilliseconds,
                     quantiles = s.Quantiles.Select(q => float.IsNaN(q) ? (float?)null : q),
                 }),
             });
@@ -196,9 +197,10 @@ public static partial class ApiEndpoints
                 charts = new[]
                 {
                     Chart("Top Standard Deviation", Top(s => s.StandardDeviation)),
-                    Chart("Top Max Roundtrip Time", Top(s => s.Maximum)),
-                    Chart("Top Packet Loss", Top(s => s.LossPercent)),
-                    Chart("Top Median Roundtrip Time", Top(s => s.Median)),
+                    Chart("Top Jitter", Top(s => s.Jitter)),
+                    Chart("Top Max Roundtrip Time", Top(s => s.MedianMaximum)),
+                    Chart("Top Packet Loss", Top(s => s.LossAverage)),
+                    Chart("Top Median Roundtrip Time", Top(s => s.MedianAverage)),
                 },
             });
         });

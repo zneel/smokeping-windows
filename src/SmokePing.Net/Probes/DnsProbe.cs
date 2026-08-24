@@ -20,7 +20,8 @@ public sealed class DnsProbe : ProbeBase
     public override string Name => "dns";
 
     public override string Describe(MeasuredTarget target) =>
-        $"DNS lookup of {target.Query ?? DefaultQuery} against {target.Host}:{target.Port ?? DefaultPort}";
+        $"{target.Pings} DNS lookups of {target.Query ?? DefaultQuery} against " +
+        $"{target.Host}:{target.Port ?? DefaultPort} every {target.StepSeconds}s";
 
     protected override async Task<double?> MeasureOnceAsync(MeasuredTarget target, CancellationToken cancellationToken)
     {

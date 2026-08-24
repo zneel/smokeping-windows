@@ -52,6 +52,80 @@ public static class StorageTests
             Assert.Close(20, averaged[Sample.MedianIndex], 0.001, "NaN rows must not drag the average down");
         });
 
+        runner.Add("Jitter: it measures variation between consecutive probes", () =>
+        {
+            // Steady arrival: every gap is 10ms.
+            Assert.Close(10, Jitter.Compute([10.0, 20.0, 30.0, 40.0]), 0.001, "a smooth ramp jitters by its step");
+
+            // The same four values reordered: gaps of 30, 20 and 10 average to 20.
+            Assert.Close(20, Jitter.Compute([10.0, 40.0, 20.0, 30.0]), 0.001, "reordering the same probes changes jitter");
+
+            Assert.Close(0, Jitter.Compute([15.0, 15.0, 15.0]), 0.001, "an unvarying round has no jitter");
+        });
+
+        runner.Add("Jitter: quantiles alone cannot tell these rounds apart", () =>
+        {
+            // The point of storing jitter rather than deriving it: these two rounds
+            // have identical distributions and completely different behaviour.
+            var smooth = new List<double?> { 10.0, 20.0, 30.0, 40.0, 50.0 };
+            var alternating = new List<double?> { 10.0, 50.0, 20.0, 40.0, 30.0 };
+
+            var smoothQuantiles = Quantiles.Compute(smooth).Quantiles;
+            var alternatingQuantiles = Quantiles.Compute(alternating).Quantiles;
+
+            for (var i = 0; i < Sample.QuantileCount; i++)
+            {
+                Assert.Close(smoothQuantiles[i], alternatingQuantiles[i], 0.001, "the distributions are identical");
+            }
+
+            Assert.True(
+                Jitter.Compute(alternating) > Jitter.Compute(smooth) * 2,
+                "but the jitter is far higher for the round that jumps about");
+        });
+
+        runner.Add("Jitter: lost probes break the pair without inventing a value", () =>
+        {
+            // 10 -> 20 is a gap of 10; the lost probe is skipped, 20 -> 30 is another 10.
+            Assert.Close(10, Jitter.Compute([10.0, 20.0, null, 30.0]), 0.001, "loss does not distort the average");
+
+            Assert.IsNaN(Jitter.Compute([null, null]), "a round with no answers has no jitter");
+            Assert.IsNaN(Jitter.Compute([12.0]), "a single answer has nothing to vary against");
+        });
+
+        runner.Add("Jitter: averaging skips rounds that produced none", () =>
+        {
+            Assert.Close(15, Jitter.Average([10f, float.NaN, 20f]), 0.001, "NaN rounds are ignored");
+            Assert.IsNaN(Jitter.Average([float.NaN, float.NaN]), "nothing to average is not zero");
+        });
+
+        runner.Add("RoundRobinFile: jitter survives the round trip and consolidation", () =>
+        {
+            using var directory = new TempDirectory();
+            using var file = RoundRobinFile.OpenOrCreate(directory.File("t.spd"), 60, 10, Plan);
+
+            file.Write(0, 10, 0, Quantiles.FromSamples([10.0]), 2.0f);
+            file.Write(60, 10, 0, Quantiles.FromSamples([10.0]), 4.0f);
+            file.Write(120, 10, 0, Quantiles.FromSamples([10.0]), 6.0f);
+            file.Write(180, 10, 0, Quantiles.FromSamples([10.0]), 8.0f);
+
+            Assert.Close(2.0, file.Read(0, 0, 0)[0].JitterMilliseconds!.Value, 0.001, "stored jitter reads back");
+            Assert.Close(
+                5.0,
+                file.Read(1, 0, 0)[0].JitterMilliseconds!.Value,
+                0.001,
+                "the coarse archive averages it");
+        });
+
+        runner.Add("RoundRobinFile: a round without jitter reports none rather than zero", () =>
+        {
+            using var directory = new TempDirectory();
+            using var file = RoundRobinFile.OpenOrCreate(directory.File("t.spd"), 60, 10, Plan);
+
+            file.Write(0, 10, 10, Sample.CreateNaNQuantiles());
+
+            Assert.True(file.Read(0, 0, 0)[0].JitterMilliseconds is null, "no answers means no jitter figure");
+        });
+
         runner.Add("RoundRobinFile: a written sample reads back unchanged", () =>
         {
             using var directory = new TempDirectory();

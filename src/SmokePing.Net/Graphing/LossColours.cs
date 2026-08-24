@@ -88,6 +88,101 @@ public static class LossColours
         return TotalLossColour;
     }
 
+    /// <summary>
+    /// The washed-out version of a loss colour, used to shade the background of
+    /// periods that lost probes. This is upstream's transform: convert to HSL, move
+    /// the lightness two thirds of the way to white, and convert back.
+    /// </summary>
+    public static string ToBackground(string colour)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(colour);
+
+        var rgb = Convert.ToInt32(colour.TrimStart('#'), 16);
+        var r = ((rgb >> 16) & 0xFF) / 255.0;
+        var g = ((rgb >> 8) & 0xFF) / 255.0;
+        var b = (rgb & 0xFF) / 255.0;
+
+        var max = Math.Max(r, Math.Max(g, b));
+        var min = Math.Min(r, Math.Min(g, b));
+        var lightness = (max + min) / 2;
+
+        double hue = 0;
+        double saturation = 0;
+
+        if (max > min)
+        {
+            var delta = max - min;
+            saturation = lightness > 0.5 ? delta / (2 - max - min) : delta / (max + min);
+
+            if (max == r)
+            {
+                hue = ((g - b) / delta) + (g < b ? 6 : 0);
+            }
+            else if (max == g)
+            {
+                hue = ((b - r) / delta) + 2;
+            }
+            else
+            {
+                hue = ((r - g) / delta) + 4;
+            }
+
+            hue /= 6;
+        }
+
+        lightness = ((1 - lightness) * (2.0 / 3.0)) + lightness;
+
+        var (nr, ng, nb) = HslToRgb(hue, saturation, lightness);
+        return $"#{nr:x2}{ng:x2}{nb:x2}";
+    }
+
+    private static (int R, int G, int B) HslToRgb(double hue, double saturation, double lightness)
+    {
+        if (saturation == 0)
+        {
+            var grey = (int)Math.Round(lightness * 255);
+            return (grey, grey, grey);
+        }
+
+        var q = lightness < 0.5 ? lightness * (1 + saturation) : lightness + saturation - (lightness * saturation);
+        var p = (2 * lightness) - q;
+
+        return (
+            (int)Math.Round(HueToChannel(p, q, hue + (1.0 / 3.0)) * 255),
+            (int)Math.Round(HueToChannel(p, q, hue) * 255),
+            (int)Math.Round(HueToChannel(p, q, hue - (1.0 / 3.0)) * 255));
+    }
+
+    private static double HueToChannel(double p, double q, double t)
+    {
+        if (t < 0)
+        {
+            t += 1;
+        }
+
+        if (t > 1)
+        {
+            t -= 1;
+        }
+
+        if (t < 1.0 / 6.0)
+        {
+            return p + ((q - p) * 6 * t);
+        }
+
+        if (t < 1.0 / 2.0)
+        {
+            return q;
+        }
+
+        if (t < 2.0 / 3.0)
+        {
+            return p + ((q - p) * ((2.0 / 3.0) - t) * 6);
+        }
+
+        return p;
+    }
+
     private static string DisplayRange(int from, int to, int pings) =>
         from == to
             ? string.Create(CultureInfo.InvariantCulture, $"{from}/{pings}")

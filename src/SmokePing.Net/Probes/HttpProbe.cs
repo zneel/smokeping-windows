@@ -23,7 +23,7 @@ public sealed class HttpProbe : ProbeBase
     public override string Name => "http";
 
     public override string Describe(MeasuredTarget target) =>
-        $"HTTP GET {ResolveUrl(target)} ({target.Pings} requests every {target.StepSeconds}s)";
+        $"{target.Pings} HTTP GETs of {ResolveUrl(target)} every {target.StepSeconds}s";
 
     protected override async Task<double?> MeasureOnceAsync(MeasuredTarget target, CancellationToken cancellationToken)
     {

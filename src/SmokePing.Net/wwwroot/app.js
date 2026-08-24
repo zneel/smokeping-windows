@@ -186,11 +186,13 @@ async function renderTarget(id) {
     <p class="subtitle">${escapeHtml(detail.host)} &middot; ${escapeHtml(detail.probeDescription)}
       ${detail.description ? `<br>${escapeHtml(detail.description)}` : ''}</p>
     <ul class="stats">
-      <li><span>median (3h)</span>${formatMs(s.median)}</li>
-      <li><span>min</span>${formatMs(s.minimum)}</li>
-      <li><span>max</span>${formatMs(s.maximum)}</li>
+      <li><span>median rtt (avg)</span>${formatMs(s.medianAverage)}</li>
+      <li><span>max</span>${formatMs(s.medianMaximum)}</li>
+      <li><span>min</span>${formatMs(s.medianMinimum)}</li>
+      <li><span>now</span>${formatMs(s.medianNow)}</li>
       <li><span>std deviation</span>${formatMs(s.standardDeviation)}</li>
-      <li><span>loss</span>${s.lossPercent.toFixed(1)}%</li>
+      <li><span>jitter</span>${formatMs(s.jitter)}</li>
+      <li><span>packet loss</span>${s.lossAverage.toFixed(2)}%</li>
       <li><span>rounds with data</span>${s.roundsWithData}</li>
     </ul>
     ${state.config.detailRanges.map((r) => `

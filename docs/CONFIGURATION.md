@@ -92,6 +92,12 @@ either a `host` or children — one with neither measures nothing and is rejecte
 Fewer, slower probes suit HTTP: twenty full requests every five minutes is a load
 test, not a measurement.
 
+### Stored measurements
+
+Each round stores the number of probes sent and lost, eleven quantiles of the
+round-trip times, and the jitter. Changing `step` or `pings` changes the record
+layout, so the previous database is renamed to `*.bak` and a fresh one started.
+
 ## `alerts`
 
 | Key | Default | Meaning |

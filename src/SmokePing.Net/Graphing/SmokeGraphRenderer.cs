@@ -19,7 +19,7 @@ public sealed class GraphRequest
 
     public required string Title { get; init; }
 
-    /// <summary>Probe description drawn under the title.</summary>
+    /// <summary>Probe description, printed on the legend's "probe:" row.</summary>
     public string Subtitle { get; init; } = string.Empty;
 
     public int PlotWidth { get; init; } = 600;
@@ -30,6 +30,13 @@ public sealed class GraphRequest
     public bool Compact { get; init; }
 
     public GraphTheme Theme { get; init; } = GraphTheme.Light;
+
+    /// <summary>
+    /// Shades rounds that lost probes across the full height of the plot. Upstream
+    /// calls this loss_background and leaves it off; it is on here because loss is
+    /// the main thing these graphs exist to show.
+    /// </summary>
+    public bool ShowLossBackground { get; init; } = true;
 
     /// <summary>Offset applied to timestamps before formatting the time axis.</summary>
     public TimeSpan UtcOffset { get; init; } = TimeSpan.Zero;

@@ -16,7 +16,7 @@ public static class SmokeGraphLayout
 {
     private const int MarginLeft = 62;
     private const int MarginRight = 18;
-    private const int LegendHeight = 76;
+    private const int LegendHeight = 104;
     private const int AxisHeight = 22;
 
     /// <summary>
@@ -49,6 +49,7 @@ public static class SmokeGraphLayout
 
         AddHeading(items, request, plot, marginTop);
         AddNoDataBands(items, request, plot);
+        AddLossBackground(items, request, plot);
         AddGrid(items, request, plot, scale);
         AddOutageMarkers(items, request, plot);
 
@@ -109,7 +110,9 @@ public static class SmokeGraphLayout
         return height;
     }
 
-    private static bool HasSubtitle(GraphRequest request) => !request.Compact && request.Subtitle.Length > 0;
+    // The probe description is printed in the legend row rather than under the title,
+    // which is where the original puts it.
+    private static bool HasSubtitle(GraphRequest request) => false;
 
     private static void AddHeading(List<GraphPrimitive> items, GraphRequest request, PlotArea plot, int marginTop)
     {
@@ -118,12 +121,13 @@ public static class SmokeGraphLayout
         if (request.Title.Length > 0)
         {
             items.Add(new TextPrimitive(
-                plot.Left,
+                request.Compact ? plot.Left : plot.Left + (plot.Width / 2.0),
                 request.Compact ? 12 : 15,
                 request.Title,
                 request.Compact ? 11 : 13,
                 Bold: true,
-                theme.Text));
+                theme.Text,
+                request.Compact ? TextAnchor.Start : TextAnchor.Middle));
         }
 
         if (HasSubtitle(request))
@@ -148,6 +152,37 @@ public static class SmokeGraphLayout
                 plot.WidthFor(request),
                 plot.Height,
                 request.Theme.NoData));
+        }
+    }
+
+    /// <summary>
+    /// Shades the full height of any round that lost probes, in a washed-out version
+    /// of that round's loss colour. Loss is the thing you are looking for on these
+    /// graphs, and a coloured line alone is easy to miss on a busy day.
+    /// </summary>
+    private static void AddLossBackground(List<GraphPrimitive> items, GraphRequest request, PlotArea plot)
+    {
+        if (!request.ShowLossBackground)
+        {
+            return;
+        }
+
+        var width = Math.Max(plot.WidthFor(request), 1.0);
+
+        foreach (var sample in request.Samples)
+        {
+            if (sample.Sent == 0 || sample.Lost == 0)
+            {
+                continue;
+            }
+
+            var colour = LossColours.ToBackground(LossColours.ForLoss(sample.Lost, sample.Sent));
+            items.Add(new RectanglePrimitive(
+                plot.XFor(sample.Timestamp, request),
+                plot.Top,
+                width,
+                plot.Height,
+                colour));
         }
     }
 
@@ -325,44 +360,80 @@ public static class SmokeGraphLayout
 
             var time = DateTimeOffset.FromUnixTimeSeconds(sample.Timestamp).ToOffset(request.UtcOffset);
             var median = sample.Median is { } m ? SmokeGraphRenderer.FormatMilliseconds(m) : "no response";
+            var jitter = sample.JitterMilliseconds is { } j
+                ? "  jitter " + SmokeGraphRenderer.FormatMilliseconds(j)
+                : string.Empty;
+
             var text = string.Create(
                 CultureInfo.InvariantCulture,
-                $"{time:yyyy-MM-dd HH:mm}  median {median}  loss {sample.Lost}/{sample.Sent}");
+                $"{time:yyyy-MM-dd HH:mm}  median {median}{jitter}  loss {sample.Lost}/{sample.Sent}");
 
             items.Add(new TooltipPrimitive(plot.XFor(sample.Timestamp, request), plot.Top, width, plot.Height, text));
         }
     }
 
-    /// <summary>Adds the loss colour key and the summary statistics for the period.</summary>
+    /// <summary>
+    /// Adds the legend block: the round-trip and loss figures as labelled rows with
+    /// average, maximum, minimum and current columns, the loss colour key, and the
+    /// probe description - the same four-row layout the original prints.
+    /// </summary>
     private static void AddLegend(List<GraphPrimitive> items, GraphRequest request, PlotArea plot)
     {
         var theme = request.Theme;
-        var top = plot.Bottom + AxisHeight + 12;
+        var stats = GraphStatistics.Compute(request.Samples);
+        const int LineHeight = 13;
+        const double LabelWidth = 74;
 
-        items.Add(new TextPrimitive(plot.Left, top, "probes lost per round", 10, Bold: false, theme.MutedText));
+        var y = plot.Bottom + AxisHeight + 10;
 
-        var x = (double)plot.Left;
-        var y = top + 8;
+        void Row(string label, string values)
+        {
+            items.Add(new TextPrimitive(plot.Left, y, label, 10, Bold: false, theme.MutedText));
+            items.Add(new TextPrimitive(plot.Left + LabelWidth, y, values, 10, Bold: false, theme.Text));
+            y += LineHeight;
+        }
+
+        string Ms(double value) => SmokeGraphRenderer.FormatMilliseconds(value);
+
+        if (stats.HasData)
+        {
+            Row(
+                "median rtt:",
+                string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"{Ms(stats.MedianAverage)} avg   {Ms(stats.MedianMaximum)} max   " +
+                    $"{Ms(stats.MedianMinimum)} min   {Ms(stats.MedianNow)} now   " +
+                    $"{Ms(stats.StandardDeviation)} sd   {stats.SignalToNoise:F2} am/s"));
+
+            Row("jitter:", string.Create(CultureInfo.InvariantCulture, $"{Ms(stats.Jitter)} avg"));
+        }
+        else
+        {
+            Row("median rtt:", "no round trip times in this period");
+        }
+
+        Row(
+            "packet loss:",
+            string.Create(
+                CultureInfo.InvariantCulture,
+                $"{stats.LossAverage:F2} % avg   {stats.LossMaximum:F2} % max   " +
+                $"{stats.LossMinimum:F2} % min   {stats.LossNow:F2} % now"));
+
+        items.Add(new TextPrimitive(plot.Left, y, "loss color:", 10, Bold: false, theme.MutedText));
+        var x = plot.Left + LabelWidth;
 
         foreach (var band in LossColours.BuildScale(request.Pings))
         {
-            items.Add(new RectanglePrimitive(x, y, 9, 9, band.Colour));
-            items.Add(new TextPrimitive(x + 13, y + 8, band.Label, 9, Bold: false, theme.Text));
-            x += 21 + (band.Label.Length * 5);
+            items.Add(new RectanglePrimitive(x, y - 8, 9, 9, band.Colour));
+            items.Add(new TextPrimitive(x + 12, y, band.Label, 9, Bold: false, theme.Text));
+            x += 20 + (band.Label.Length * 5.5);
         }
 
-        var stats = GraphStatistics.Compute(request.Samples);
-        var summary = stats.HasData
-            ? string.Create(
-                CultureInfo.InvariantCulture,
-                $"median {SmokeGraphRenderer.FormatMilliseconds(stats.Median)}   " +
-                $"min {SmokeGraphRenderer.FormatMilliseconds(stats.Minimum)}   " +
-                $"max {SmokeGraphRenderer.FormatMilliseconds(stats.Maximum)}   " +
-                $"sd {SmokeGraphRenderer.FormatMilliseconds(stats.StandardDeviation)}   " +
-                $"loss {stats.LossPercent:F1}%")
-            : "no data for this period";
+        y += LineHeight;
 
-        items.Add(new TextPrimitive(plot.Left, y + 26, summary, 10, Bold: false, theme.Text));
+        var probe = request.Subtitle.Length > 0 ? request.Subtitle : "probe";
+        var end = DateTimeOffset.FromUnixTimeSeconds(request.ToTimestamp).ToOffset(request.UtcOffset);
+        Row("probe:", string.Create(CultureInfo.InvariantCulture, $"{probe}   end: {end:yyyy-MM-dd HH:mm}"));
     }
 
     /// <summary>

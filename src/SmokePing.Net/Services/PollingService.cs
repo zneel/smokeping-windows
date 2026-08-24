@@ -75,7 +75,11 @@ public sealed class PollingService : BackgroundService
             {
                 var measurements = await probe.MeasureAsync(target, stoppingToken).ConfigureAwait(false);
                 var (sent, lost, quantiles) = Quantiles.Compute(measurements);
-                database.Write(slotStart.Value, sent, lost, quantiles);
+
+                // Jitter depends on the order the probes came back in, which the
+                // stored quantiles do not preserve, so it is computed here.
+                var jitter = Jitter.Compute(measurements);
+                database.Write(slotStart.Value, sent, lost, quantiles, jitter);
 
                 var sample = new Sample
                 {
@@ -83,14 +87,16 @@ public sealed class PollingService : BackgroundService
                     Sent = sent,
                     Lost = lost,
                     Quantiles = quantiles,
+                    Jitter = jitter,
                 };
 
                 _logger.LogDebug(
-                    "{Target}: {Lost}/{Sent} lost, median {Median:F1}ms.",
+                    "{Target}: {Lost}/{Sent} lost, median {Median:F1}ms, jitter {Jitter:F1}ms.",
                     target.Id,
                     lost,
                     sent,
-                    sample.Median ?? double.NaN);
+                    sample.Median ?? double.NaN,
+                    sample.JitterMilliseconds ?? double.NaN);
 
                 await RaiseAlertsAsync(target, sample, stoppingToken).ConfigureAwait(false);
             }

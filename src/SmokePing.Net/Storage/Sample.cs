@@ -23,11 +23,21 @@ public sealed class Sample
     /// <summary>Round-trip times in milliseconds at 0%, 10%, ... 100%.</summary>
     public required float[] Quantiles { get; init; }
 
+    /// <summary>
+    /// Mean absolute variation between consecutive probes, in milliseconds, or
+    /// <see cref="float.NaN"/> when fewer than two probes came back. See
+    /// <see cref="Storage.Jitter"/> for why this is stored rather than derived.
+    /// </summary>
+    public float Jitter { get; init; } = float.NaN;
+
     /// <summary>Median round-trip time in milliseconds, or null when the round was a total loss.</summary>
     public double? Median => float.IsNaN(Quantiles[MedianIndex]) ? null : Quantiles[MedianIndex];
 
     /// <summary>Fraction of probes lost, 0.0 - 1.0.</summary>
     public double LossFraction => Sent == 0 ? 0 : (double)Lost / Sent;
+
+    /// <summary>Jitter in milliseconds, or null when the round did not produce one.</summary>
+    public double? JitterMilliseconds => float.IsNaN(Jitter) ? null : Jitter;
 
     public static Sample Empty(long timestamp) => new()
     {
@@ -35,6 +45,7 @@ public sealed class Sample
         Sent = 0,
         Lost = 0,
         Quantiles = CreateNaNQuantiles(),
+        Jitter = float.NaN,
     };
 
     public static float[] CreateNaNQuantiles()

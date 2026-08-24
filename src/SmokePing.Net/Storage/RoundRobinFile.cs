@@ -24,15 +24,23 @@ public sealed record ArchiveInfo(int StepSeconds, int SlotCount, long Offset)
 ///
 /// Layout:
 ///   header (64 bytes) | archive descriptors (16 bytes each) | slot data
-/// Each slot is a fixed 60 bytes: slot index (8), sent (4), lost (4), 11 quantiles (44).
+/// Each slot is a fixed 64 bytes: slot index (8), sent (4), lost (4), jitter (4),
+/// 11 quantiles (44).
 /// </summary>
 public sealed class RoundRobinFile : IDisposable
 {
     private const uint Magic = 0x53504442; // "SPDB"
-    private const int FormatVersion = 1;
+    /// <summary>
+    /// Bumped to 2 when jitter joined each record. A file written by an older
+    /// version is moved aside and recreated rather than misread.
+    /// </summary>
+    private const int FormatVersion = 2;
     private const int HeaderSize = 64;
     private const int ArchiveDescriptorSize = 16;
-    private const int SlotSize = 8 + 4 + 4 + (Sample.QuantileCount * 4);
+    private const int SlotSize = 8 + 4 + 4 + 4 + (Sample.QuantileCount * 4);
+
+    /// <summary>Byte offset of the quantile vector within a slot record.</summary>
+    private const int QuantileOffset = 20;
 
     /// <summary>Slot index written into unused slots.</summary>
     private const long EmptySlot = -1;
@@ -222,9 +230,10 @@ public sealed class RoundRobinFile : IDisposable
         // Pre-fill every slot as empty so partial reads never see uninitialised data.
         var empty = new byte[SlotSize];
         BinaryPrimitives.WriteInt64LittleEndian(empty, EmptySlot);
+        BinaryPrimitives.WriteSingleLittleEndian(empty.AsSpan(16), float.NaN);
         for (var i = 0; i < Sample.QuantileCount; i++)
         {
-            BinaryPrimitives.WriteSingleLittleEndian(empty.AsSpan(16 + (i * 4)), float.NaN);
+            BinaryPrimitives.WriteSingleLittleEndian(empty.AsSpan(QuantileOffset + (i * 4)), float.NaN);
         }
 
         foreach (var archive in archives)
@@ -243,7 +252,7 @@ public sealed class RoundRobinFile : IDisposable
     /// Stores one measurement round and refreshes every consolidated archive that
     /// covers it. <paramref name="timestamp"/> is snapped down to the base step.
     /// </summary>
-    public void Write(long timestamp, int sent, int lost, float[] quantiles)
+    public void Write(long timestamp, int sent, int lost, float[] quantiles, float jitter = float.NaN)
     {
         ArgumentNullException.ThrowIfNull(quantiles);
         if (quantiles.Length != Sample.QuantileCount)
@@ -254,7 +263,7 @@ public sealed class RoundRobinFile : IDisposable
         lock (_gate)
         {
             var slotIndex = timestamp / StepSeconds;
-            WriteSlot(Archives[0], slotIndex, sent, lost, quantiles);
+            WriteSlot(Archives[0], slotIndex, sent, lost, quantiles, jitter);
 
             for (var i = 1; i < Archives.Count; i++)
             {
@@ -278,6 +287,7 @@ public sealed class RoundRobinFile : IDisposable
         var bucketEnd = bucketStart + archive.StepSeconds;
 
         var vectors = new List<float[]>();
+        var jitters = new List<float>();
         var sent = 0;
         var lost = 0;
 
@@ -292,6 +302,7 @@ public sealed class RoundRobinFile : IDisposable
             sent += sample.Sent;
             lost += sample.Lost;
             vectors.Add(sample.Quantiles);
+            jitters.Add(sample.Jitter);
         }
 
         if (sent == 0)
@@ -299,18 +310,25 @@ public sealed class RoundRobinFile : IDisposable
             return;
         }
 
-        WriteSlot(archive, bucketIndex, sent, lost, Quantiles.Average(vectors));
+        WriteSlot(archive, bucketIndex, sent, lost, Quantiles.Average(vectors), Jitter.Average(jitters));
     }
 
-    private void WriteSlot(ArchiveInfo archive, long slotIndex, int sent, int lost, float[] quantiles)
+    private void WriteSlot(
+        ArchiveInfo archive,
+        long slotIndex,
+        int sent,
+        int lost,
+        float[] quantiles,
+        float jitter)
     {
         var position = archive.Offset + ((slotIndex % archive.SlotCount) * SlotSize);
         BinaryPrimitives.WriteInt64LittleEndian(_slotBuffer, slotIndex);
         BinaryPrimitives.WriteInt32LittleEndian(_slotBuffer.AsSpan(8), sent);
         BinaryPrimitives.WriteInt32LittleEndian(_slotBuffer.AsSpan(12), lost);
+        BinaryPrimitives.WriteSingleLittleEndian(_slotBuffer.AsSpan(16), jitter);
         for (var i = 0; i < Sample.QuantileCount; i++)
         {
-            BinaryPrimitives.WriteSingleLittleEndian(_slotBuffer.AsSpan(16 + (i * 4)), quantiles[i]);
+            BinaryPrimitives.WriteSingleLittleEndian(_slotBuffer.AsSpan(QuantileOffset + (i * 4)), quantiles[i]);
         }
 
         _stream.Seek(position, SeekOrigin.Begin);
@@ -346,7 +364,7 @@ public sealed class RoundRobinFile : IDisposable
         var quantiles = new float[Sample.QuantileCount];
         for (var i = 0; i < Sample.QuantileCount; i++)
         {
-            quantiles[i] = BinaryPrimitives.ReadSingleLittleEndian(_slotBuffer.AsSpan(16 + (i * 4)));
+            quantiles[i] = BinaryPrimitives.ReadSingleLittleEndian(_slotBuffer.AsSpan(QuantileOffset + (i * 4)));
         }
 
         return new Sample
@@ -355,6 +373,7 @@ public sealed class RoundRobinFile : IDisposable
             Sent = BinaryPrimitives.ReadInt32LittleEndian(_slotBuffer.AsSpan(8)),
             Lost = BinaryPrimitives.ReadInt32LittleEndian(_slotBuffer.AsSpan(12)),
             Quantiles = quantiles,
+            Jitter = BinaryPrimitives.ReadSingleLittleEndian(_slotBuffer.AsSpan(16)),
         };
     }
 

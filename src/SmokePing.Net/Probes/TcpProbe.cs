@@ -15,7 +15,7 @@ public sealed class TcpProbe : ProbeBase
     public override string Name => "tcp";
 
     public override string Describe(MeasuredTarget target) =>
-        $"TCP connect to port {target.Port ?? DefaultPort} ({target.Pings} probes every {target.StepSeconds}s)";
+        $"{target.Pings} TCP connects to port {target.Port ?? DefaultPort} every {target.StepSeconds}s";
 
     protected override async Task<double?> MeasureOnceAsync(MeasuredTarget target, CancellationToken cancellationToken)
     {
