@@ -71,6 +71,24 @@ jobs:
             (cd "staging/$RID" && zip -qr "../../smokeping-net-$VERSION-$RID.zip" .)
           done
 
+          # A framework-dependent build as well. Windows Smart App Control blocks
+          # executables that are neither signed by a trusted certificate nor known to
+          # Microsoft, which an unsigned open-source build is not. Launching this one
+          # through the Microsoft-signed "dotnet" host avoids handing Windows an
+          # unknown executable to judge.
+          dotnet publish src/SmokePing.Net/SmokePing.Net.csproj \
+            --configuration Release \
+            -p:Version="$VERSION" \
+            -p:DebugType=none \
+            --output staging/portable
+
+          mkdir -p staging/portable/config
+          cp config/smokeping.json staging/portable/config/smokeping.json
+          cp README.md docs/CONFIGURATION.md docs/COMPATIBILITY.md staging/portable/
+          cp -r scripts staging/portable/scripts
+          rm -f staging/portable/*.pdb
+          (cd staging/portable && zip -qr "../../smokeping-net-$VERSION-dotnet.zip" .)
+
           ls -la *.zip
 
       - name: Publish the release
@@ -122,6 +140,25 @@ jobs:
           | `win-x64` | Windows on Intel or AMD |
           | `win-arm64` | Windows on ARM |
           | `linux-x64` | Linux (ICMP needs `net.ipv4.ping_group_range` or `CAP_NET_RAW`) |
+          | `dotnet` | Any platform, needs the .NET 10 runtime — see below |
+
+          ### If Windows blocks it
+
+          These builds are not code-signed, so **Smart App Control** blocks them: it allows
+          only applications that are signed by a certificate it trusts or already known to
+          Microsoft, and an unsigned build is neither. SmartScreen may warn for the same reason.
+
+          The `dotnet` download avoids the problem by not being an unknown executable at all —
+          you launch it with the Microsoft-signed `dotnet` host instead. Install the
+          [.NET 10 runtime](https://dotnet.microsoft.com/download/dotnet/10.0), then:
+
+          ```
+          dotnet SmokePing.Net.dll --config config\smokeping.json --check
+          dotnet SmokePing.Net.dll --config config\smokeping.json
+          ```
+
+          Building from source works too. Turning Smart App Control off is the other option,
+          but be aware it is **one-way**: Windows cannot turn it back on without a reset.
           NOTES
 
           gh release create "$TAG" \
