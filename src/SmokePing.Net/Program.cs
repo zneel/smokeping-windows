@@ -28,7 +28,7 @@ public static class Program
         LoadedConfiguration config;
         try
         {
-            config = ConfigLoader.Load(options.ConfigPath);
+            config = ConfigLoader.Load(options.ConfigPath, options.SkipUnsupported);
         }
         catch (ConfigurationException ex)
         {
@@ -60,6 +60,12 @@ public static class Program
                 Console.WriteLine($"  targets:        {config.Targets.Count}");
                 Console.WriteLine($"  alerts:         {config.Alerts.Count}");
                 Console.WriteLine($"  data directory: {config.DataDirectory}");
+
+                foreach (var skipped in config.SkippedTargets)
+                {
+                    Console.WriteLine($"  SKIPPED: {skipped}");
+                }
+
                 // Resolving dynamic hosts here is the point of --check for them: it
                 // shows what %gateway% actually found on this machine.
                 // Silent: --check prints its own findings, in order.
@@ -145,6 +151,12 @@ public static class Program
         app.MapFallbackToFile("index.html");
 
         var logger = app.Services.GetRequiredService<ILogger<PollingService>>();
+
+        foreach (var skipped in config.SkippedTargets)
+        {
+            logger.LogWarning("Skipped target: {Reason}", skipped);
+        }
+
         logger.LogInformation(
             "{Site} listening on {Url}, data in {DataDirectory}.",
             config.Raw.General.SiteName,
@@ -238,6 +250,9 @@ public sealed class CommandLineOptions
           --service         Run under the Windows service control manager
           --service-name    Service name to register as (default: SmokePingNet)
           --log-file <path> Write a log file (always on in service mode)
+          --skip-unsupported Drop targets this version cannot measure instead of
+                            refusing the whole file - useful when adopting an
+                            existing SmokePing configuration
           --no-polling      Serve the web interface without taking measurements
           --help            Show this help
 
@@ -255,6 +270,9 @@ public sealed class CommandLineOptions
     public bool CheckOnly { get; private init; }
 
     public bool NoPolling { get; private init; }
+
+    /// <summary>Drop targets that cannot be measured rather than refusing to start.</summary>
+    public bool SkipUnsupported { get; private init; }
 
     public bool ShowHelp { get; private init; }
 
@@ -293,6 +311,7 @@ public sealed class CommandLineOptions
         var configPath = Path.Combine("config", "smokeping.json");
         var checkOnly = false;
         var noPolling = false;
+        var skipUnsupported = false;
         var showHelp = false;
         var runAsService = false;
         var serviceName = "SmokePingNet";
@@ -320,6 +339,9 @@ public sealed class CommandLineOptions
                 case "--no-polling":
                     noPolling = true;
                     break;
+                case "--skip-unsupported":
+                    skipUnsupported = true;
+                    break;
                 default:
                     showHelp = true;
                     break;
@@ -334,6 +356,7 @@ public sealed class CommandLineOptions
             SearchedConfigPaths = searched,
             CheckOnly = checkOnly,
             NoPolling = noPolling,
+            SkipUnsupported = skipUnsupported,
             ShowHelp = showHelp,
             RunAsService = runAsService,
             ServiceName = serviceName,

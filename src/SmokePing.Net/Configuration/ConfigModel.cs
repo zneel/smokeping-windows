@@ -10,10 +10,32 @@ public sealed class SmokePingConfig
     /// <summary>Settings inherited by every target unless overridden further down the tree.</summary>
     public TargetDefaults Defaults { get; set; } = new();
 
+    /// <summary>Storage settings, taken from the Database section of a native configuration.</summary>
+    public DatabaseConfig Database { get; set; } = new();
+
     /// <summary>The target hierarchy. Nodes without a host act as menu folders.</summary>
     public List<TargetNode> Targets { get; set; } = [];
 
     public List<AlertRuleConfig> Alerts { get; set; } = [];
+}
+
+/// <summary>One resolution tier, as the Database section's archive table describes it.</summary>
+public sealed class ArchiveConfig
+{
+    /// <summary>How many polling steps one row of this archive covers.</summary>
+    public int Steps { get; set; } = 1;
+
+    /// <summary>How many rows the archive keeps before it wraps.</summary>
+    public int Rows { get; set; }
+}
+
+public sealed class DatabaseConfig
+{
+    /// <summary>
+    /// Resolution tiers. Empty means the built-in plan, which matches upstream's
+    /// default archive table.
+    /// </summary>
+    public List<ArchiveConfig> Archives { get; set; } = [];
 }
 
 public sealed class GeneralConfig

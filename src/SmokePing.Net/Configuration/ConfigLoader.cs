@@ -23,6 +23,9 @@ public sealed class LoadedConfiguration
 
     public required string ConfigFilePath { get; init; }
 
+    /// <summary>Targets that were dropped because this implementation cannot measure them.</summary>
+    public IReadOnlyList<string> SkippedTargets { get; init; } = [];
+
     private Dictionary<string, MeasuredTarget>? _byId;
 
     public bool TryGetTarget(string id, out MeasuredTarget target)
@@ -77,7 +80,7 @@ public static class ConfigLoader
         AlertRules = [],
     };
 
-    public static LoadedConfiguration Load(string configFilePath)
+    public static LoadedConfiguration Load(string configFilePath, bool skipUnsupported = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(configFilePath);
 
@@ -87,10 +90,20 @@ public static class ConfigLoader
             throw new ConfigurationException($"Configuration file '{fullPath}' does not exist.");
         }
 
+        var text = File.ReadAllText(fullPath);
+
+        // A SmokePing installation's own configuration is read directly, so migrating
+        // does not start with translating a file by hand.
+        if (SmokePingConfigParser.LooksLikeNativeFormat(text))
+        {
+            var sections = SmokePingConfigParser.Parse(fullPath);
+            return Build(SmokePingConfigTranslator.Translate(sections, fullPath), fullPath, skipUnsupported);
+        }
+
         SmokePingConfig? raw;
         try
         {
-            raw = JsonSerializer.Deserialize<SmokePingConfig>(File.ReadAllText(fullPath), JsonOptions);
+            raw = JsonSerializer.Deserialize<SmokePingConfig>(text, JsonOptions);
         }
         catch (JsonException ex)
         {
@@ -102,11 +115,22 @@ public static class ConfigLoader
             throw new ConfigurationException($"Configuration file '{fullPath}' is empty.");
         }
 
-        return Build(raw, fullPath);
+        return Build(raw, fullPath, skipUnsupported);
     }
 
     /// <summary>Validates an already-parsed configuration. Exposed for tests.</summary>
-    public static LoadedConfiguration Build(SmokePingConfig raw, string configFilePath)
+    public static LoadedConfiguration Build(SmokePingConfig raw, string configFilePath) =>
+        Build(raw, configFilePath, skipUnsupported: false);
+
+    /// <summary>
+    /// Validates a configuration.
+    ///
+    /// When <paramref name="skipUnsupported"/> is set, targets this implementation
+    /// cannot measure are dropped with a note rather than refusing the whole file.
+    /// That matters when adopting an existing installation's configuration, where one
+    /// unsupported target among fifty should not stop the other forty-nine.
+    /// </summary>
+    public static LoadedConfiguration Build(SmokePingConfig raw, string configFilePath, bool skipUnsupported)
     {
         ArgumentNullException.ThrowIfNull(raw);
 
@@ -116,10 +140,15 @@ public static class ConfigLoader
         var seenIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         var rootDefaults = Merge(BuiltInDefaults, raw.Defaults);
+        var skipped = new List<string>();
 
         foreach (var node in raw.Targets)
         {
-            menu.Add(Walk(node, parentId: string.Empty, rootDefaults, targets, alerts, seenIds));
+            var walked = Walk(node, string.Empty, rootDefaults, targets, alerts, seenIds, skipUnsupported, skipped);
+            if (walked is not null)
+            {
+                menu.Add(walked);
+            }
         }
 
         if (targets.Count == 0)
@@ -140,6 +169,7 @@ public static class ConfigLoader
             Alerts = alerts,
             DataDirectory = Path.GetFullPath(dataDirectory),
             ConfigFilePath = configFilePath,
+            SkippedTargets = skipped,
         };
     }
 
@@ -183,13 +213,15 @@ public static class ConfigLoader
     }
 
     /// <summary>Walks one subtree, resolving settings and collecting measured targets.</summary>
-    private static MenuNode Walk(
+    private static MenuNode? Walk(
         TargetNode node,
         string parentId,
         TargetDefaults inherited,
         List<MeasuredTarget> targets,
         IReadOnlyDictionary<string, CompiledAlertRule> alerts,
-        HashSet<string> seenIds)
+        HashSet<string> seenIds,
+        bool skipUnsupported,
+        List<string> skipped)
     {
         if (string.IsNullOrWhiteSpace(node.Id))
         {
@@ -211,7 +243,15 @@ public static class ConfigLoader
 
         if (!string.IsNullOrWhiteSpace(node.Host))
         {
-            ValidateHost(id, node.Host);
+            try
+            {
+                ValidateHost(id, node.Host);
+            }
+            catch (ConfigurationException ex) when (skipUnsupported)
+            {
+                skipped.Add(ex.Message);
+                return null;
+            }
         }
 
         var settings = Merge(inherited, node);
@@ -229,16 +269,34 @@ public static class ConfigLoader
 
         if (!string.IsNullOrWhiteSpace(node.Host))
         {
-            targets.Add(BuildTarget(id, title, parentId, node, settings, alerts));
+            try
+            {
+                targets.Add(BuildTarget(id, title, parentId, node, settings, alerts));
+            }
+            catch (ConfigurationException ex) when (skipUnsupported)
+            {
+                skipped.Add(ex.Message);
+                return null;
+            }
         }
 
         foreach (var child in node.Children)
         {
-            menuNode.Children.Add(Walk(child, id, settings, targets, alerts, seenIds));
+            var walked = Walk(child, id, settings, targets, alerts, seenIds, skipUnsupported, skipped);
+            if (walked is not null)
+            {
+                menuNode.Children.Add(walked);
+            }
         }
 
         if (!menuNode.IsTarget && menuNode.Children.Count == 0)
         {
+            // A folder whose children were all skipped is not an error in itself.
+            if (skipUnsupported)
+            {
+                return null;
+            }
+
             throw new ConfigurationException($"Target '{id}' has neither a host nor any children.");
         }
 

@@ -15,6 +15,7 @@ public static class Program
         GraphingTests.Register(runner);
         ProbeTests.Register(runner);
         ServiceRegistrationTests.Register(runner);
+        NativeConfigTests.Register(runner);
 
         Console.WriteLine("SmokePing.NET test suite");
         Console.WriteLine();

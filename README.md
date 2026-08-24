@@ -79,7 +79,24 @@ statistics, in the API, and as a "Top Jitter" chart.
 
 ## Configuration
 
-Everything lives in one JSON file. See [config/smokeping.json](config/smokeping.json)
+**An existing SmokePing configuration works as it is.** Point this at the file your
+installation already uses — `*** Targets ***`, `+`/`++` hierarchy, `@include` and all —
+and it reads it directly:
+
+```powershell
+SmokePing.Net.exe --config C:\smokeping\etc\config --check
+```
+
+Probe classes are mapped onto the four implemented here (`FPing` → ICMP, `TCPPing` →
+TCP, `DNS`/`AnotherDNS` → DNS, `Curl` → HTTP), units are converted (upstream's
+fractional seconds become milliseconds), and the `*** Database ***` archive table sets
+retention. A target that cannot be measured — a `DYNAMIC` host, a multi-host list, a
+`~slave` suffix — is reported rather than quietly failing every round; pass
+`--skip-unsupported` to load the rest of the file anyway.
+
+The native format and JSON are both accepted; the file itself decides which.
+
+Everything can also live in one JSON file. See [config/smokeping.json](config/smokeping.json)
 for a worked example and [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for the full
 reference.
 

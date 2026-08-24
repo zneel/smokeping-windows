@@ -25,7 +25,14 @@ public static class ServiceRegistration
 
         services.AddSingleton(config);
         services.AddSingleton(TimeProvider.System);
-        services.AddSingleton(new DataStore(config.DataDirectory));
+        // A native configuration brings its own archive table; otherwise the default
+        // plan applies, which is the same table upstream ships.
+        var plan = config.Raw.Database.Archives
+            .Where(archive => archive.Steps > 0 && archive.Rows > 0)
+            .Select(archive => (archive.Steps, archive.Rows))
+            .ToList();
+
+        services.AddSingleton(new DataStore(config.DataDirectory, plan));
         services.AddSingleton(new AlertEngine(config.Alerts));
         services.AddSingleton<AlertNotifier>();
         services.AddSingleton<HostResolver>();

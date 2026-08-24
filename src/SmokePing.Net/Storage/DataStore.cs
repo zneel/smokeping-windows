@@ -27,15 +27,31 @@ public sealed class DataStore : IDisposable
         (144, 2400),
     ];
 
+    private readonly (int Multiplier, int SlotCount)[] _archivePlan;
+
     private readonly ConcurrentDictionary<string, RoundRobinFile> _files = new(StringComparer.OrdinalIgnoreCase);
     private readonly string _dataDirectory;
 
-    public DataStore(string dataDirectory)
+    /// <summary>
+    /// Creates a store. <paramref name="archivePlan"/> overrides the default retention,
+    /// which is how a native configuration's own archive table is honoured.
+    /// </summary>
+    public DataStore(string dataDirectory, IReadOnlyList<(int Multiplier, int SlotCount)>? archivePlan = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(dataDirectory);
         _dataDirectory = Path.GetFullPath(dataDirectory);
         Directory.CreateDirectory(_dataDirectory);
+
+        _archivePlan = archivePlan is { Count: > 0 } ? [.. archivePlan] : ArchivePlan;
+
+        if (_archivePlan[0].Multiplier != 1)
+        {
+            throw new ArgumentException("The first archive must run at the polling step.", nameof(archivePlan));
+        }
     }
+
+    /// <summary>The resolution tiers this store creates.</summary>
+    public IReadOnlyList<(int Multiplier, int SlotCount)> Archives => _archivePlan;
 
     public string DataDirectory => _dataDirectory;
 
@@ -52,7 +68,7 @@ public sealed class DataStore : IDisposable
                 state.Store.ResolvePath(state.Target.Id),
                 state.Target.StepSeconds,
                 state.Target.Pings,
-                ArchivePlan),
+                state.Store._archivePlan),
             (Store: this, Target: target));
     }
 

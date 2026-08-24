@@ -1,5 +1,10 @@
 # Configuration reference
 
+Two formats are accepted, and the file itself decides which: SmokePing's own
+`*** Section ***` format, so an existing installation's configuration works unchanged,
+or JSON. This reference describes the JSON; for the native format see the mapping at
+the end.
+
 One JSON file describes everything. Comments (`//`) and trailing commas are allowed.
 Validate a file before relying on it:
 
@@ -241,3 +246,32 @@ further back than that.
 Both run on every notification. Neither is retried: a webhook that is down when an
 alert fires misses it, so point it at something durable rather than at a pager
 directly.
+
+## Reading an existing SmokePing configuration
+
+A file that starts with a `*** Section ***` header is read as SmokePing's own format.
+What maps across:
+
+| Upstream | Becomes |
+| --- | --- |
+| `*** General ***` `owner`, `contact`, `datadir` | `general.owner`, `contactEmail`, `dataDirectory` |
+| `*** Database ***` `step`, `pings` | `defaults.step`, `defaults.pings` |
+| `*** Database ***` `AVERAGE` rows | The archive tiers, so retention is preserved |
+| `*** Alerts ***` `+name` | An alert rule, with `edgetrigger` defaulting off as upstream does |
+| `*** Probes ***` `+FPing` parameters | Probe settings applied wherever that probe is used |
+| `*** Targets ***` tree | The target hierarchy; `menu` becomes the title |
+| `probe = FPing \| TCPPing \| DNS \| AnotherDNS \| Curl` | `icmp` \| `tcp` \| `dns` \| `http` |
+| `timeout`, `hostinterval`, `mininterval` | `timeoutMs`, `pingIntervalMs` — seconds converted to milliseconds |
+| `urlformat` | `url` |
+| `lookup` | `query` |
+
+`MIN` and `MAX` archive rows are ignored, because upstream creates those archives but
+none of its own graphs read them.
+
+Ignored without complaint: everything describing machinery this does not have — the
+CGI URL, mail hosts and templates, image caches, `*** Presentation ***`, `*** Slaves ***`.
+
+Reported rather than ignored, because they change what gets measured: an unimplemented
+probe class, an alert using a matcher plugin, and targets whose host is `DYNAMIC`, a
+list of `/target/paths`, or carries a `~slave` suffix. Pass `--skip-unsupported` to
+drop those targets and load the rest; each one is listed on start-up.

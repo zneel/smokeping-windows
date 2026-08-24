@@ -113,8 +113,11 @@ probe's exact time is not recoverable.
 ICMP uses the Windows IP Helper API rather than `fping`, so it needs no external
 binary and no administrator rights. There is no plugin mechanism.
 
-**Configuration.** JSON, not upstream's `*** Section ***` format. Existing
-`config` files are not readable; the concepts map across directly.
+**Configuration.** Upstream's own format is read directly - sections, the `+`/`++`
+target hierarchy, backslash continuation, `@include`, and the Database archive table.
+JSON is also accepted; the file decides. Settings with no meaning here (the CGI URL,
+mail templates, image caches) are ignored, but anything that would change what gets
+measured is not: an unimplemented probe or an unsupported host form is an error.
 
 **Notifications.** A webhook and an external command. There is no built-in SMTP
 client, no mail templates and no `smokemail`.
