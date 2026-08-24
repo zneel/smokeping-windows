@@ -103,24 +103,27 @@ public static class GraphingTests
             Assert.Contains(svg, "smoke", "the title is carried into the picture");
         });
 
-        runner.Add("SmokeGraphRenderer: the smoke is drawn as nested bands", () =>
+        runner.Add("SmokeGraphLayout: the smoke is laid out as nested bands", () =>
         {
-            var svg = Render(BuildSamples(24));
-            var paths = XDocument.Parse(svg).Descendants()
-                .Count(e => e.Name.LocalName == "path");
+            var bands = Scene(BuildSamples(24)).Primitives.OfType<PolygonPrimitive>().ToList();
 
-            Assert.Equal(Sample.QuantileCount / 2, paths, "one band per pair of opposite quantiles");
+            Assert.Equal(Sample.QuantileCount / 2, bands.Count, "one band per pair of opposite quantiles");
+
+            // Each band is a closed ribbon: the upper edge forward, the lower edge back.
+            foreach (var band in bands)
+            {
+                Assert.Equal(48, band.Points.Count, "both edges of the ribbon are present");
+            }
         });
 
-        runner.Add("SmokeGraphRenderer: a gap splits the smoke instead of bridging it", () =>
+        runner.Add("SmokeGraphLayout: a gap splits the smoke instead of bridging it", () =>
         {
             var samples = BuildSamples(24).ToList();
             samples[12] = Sample.Empty(samples[12].Timestamp);
 
-            var paths = XDocument.Parse(Render(samples)).Descendants()
-                .Count(e => e.Name.LocalName == "path");
+            var bands = Scene(samples).Primitives.OfType<PolygonPrimitive>().Count();
 
-            Assert.Equal(Sample.QuantileCount / 2 * 2, paths, "each band is drawn as two separate runs");
+            Assert.Equal(Sample.QuantileCount / 2 * 2, bands, "each band becomes two separate runs");
         });
 
         runner.Add("SmokeGraphRenderer: lossy rounds colour the median line", () =>
@@ -161,17 +164,19 @@ public static class GraphingTests
             var svg = Render(dead);
 
             Assert.Contains(svg, "no probe was answered", "a total outage is not reported as missing data");
-            Assert.Contains(svg, OutageGroup, "and it is marked on the plot");
+            Assert.Equal(
+                dead.Count,
+                OutageMarkers(Scene(dead, compact: true)),
+                "every dead round is marked on the plot");
             XDocument.Parse(svg);
         });
 
         runner.Add("SmokeGraphRenderer: a healthy period draws no outage markers", () =>
         {
-            var svg = Render(BuildSamples(8));
-
-            // The colour itself also appears in the legend, so look for the marker group.
-            Assert.False(
-                svg.Contains(OutageGroup, StringComparison.Ordinal),
+            // The colour itself also appears in the legend, so count the plot markers.
+            Assert.Equal(
+                0,
+                OutageMarkers(Scene(BuildSamples(8), compact: true)),
                 "nothing is marked when every round was answered");
         });
 
@@ -257,15 +262,30 @@ public static class GraphingTests
         });
     }
 
-    /// <summary>The group the renderer wraps its total-loss markers in.</summary>
-    private static string OutageGroup => $"<g fill=\"{LossColours.TotalLossColour}\">";
+    /// <summary>
+    /// Counts the bars marking rounds in which every probe was lost. Callers pass a
+    /// compact scene so the legend's swatch in the same colour is not counted.
+    /// </summary>
+    private static int OutageMarkers(GraphScene scene) => scene.Primitives
+        .OfType<RectanglePrimitive>()
+        .Count(r => r.Fill == LossColours.TotalLossColour);
+
+    private static GraphScene Scene(IReadOnlyList<Sample> samples, bool compact = false) =>
+        SmokeGraphLayout.Build(BuildRequest(samples, compact: compact));
 
     private static string Render(
         IReadOnlyList<Sample> samples,
         string title = "smoke test",
         bool compact = false,
         GraphTheme? theme = null) =>
-        SmokeGraphRenderer.Render(new GraphRequest
+        SmokeGraphRenderer.Render(BuildRequest(samples, title, compact, theme));
+
+    private static GraphRequest BuildRequest(
+        IReadOnlyList<Sample> samples,
+        string title = "smoke test",
+        bool compact = false,
+        GraphTheme? theme = null) =>
+        new()
         {
             Samples = samples,
             Pings = 20,
@@ -276,7 +296,7 @@ public static class GraphingTests
             Subtitle = "ICMP Echo Ping",
             Compact = compact,
             Theme = theme ?? GraphTheme.Light,
-        });
+        };
 
     private static IReadOnlyList<Sample> BuildSamples(int count) =>
         Enumerable.Range(0, count)

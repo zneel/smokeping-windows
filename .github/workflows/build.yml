@@ -1,0 +1,54 @@
+name: build
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  # The daemon and its tests are platform independent, so they are built and run
+  # on Linux where CI minutes are cheapest.
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Build daemon and tests
+        run: dotnet build src/SmokePing.Net/SmokePing.Net.csproj tests/SmokePing.Net.Tests/SmokePing.Net.Tests.csproj --configuration Release
+
+      - name: Run tests
+        run: dotnet run --project tests/SmokePing.Net.Tests --configuration Release --no-build
+
+      - name: Validate the sample configuration
+        run: dotnet run --project src/SmokePing.Net --configuration Release --no-build -- --config config/smokeping.json --check
+
+  # The desktop client is Windows only, and this is the job that proves the Windows
+  # service host and the GDI+ renderer compile against the real targeting packs.
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Build the whole solution
+        run: dotnet build SmokePing.Net.sln --configuration Release
+
+      - name: Run tests
+        run: dotnet run --project tests/SmokePing.Net.Tests --configuration Release --no-build
+
+      - name: Publish the daemon and the desktop client
+        run: |
+          dotnet publish src/SmokePing.Net/SmokePing.Net.csproj --configuration Release --output publish/daemon
+          dotnet publish src/SmokePing.Net.Desktop/SmokePing.Net.Desktop.csproj --configuration Release --output publish/desktop
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: smokeping-net-windows
+          path: publish/

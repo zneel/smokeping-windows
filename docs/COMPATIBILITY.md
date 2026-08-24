@@ -77,6 +77,11 @@ matchers do), and remote-triggered graph zooming.
 **Web interface.** A single-page application over a JSON API, with server-rendered
 SVG graphs rather than RRDtool PNGs. Graph URLs are stable and embeddable.
 
+**Desktop client.** Upstream has no native GUI at all. This adds a WinForms client
+that draws the graphs with GDI+ from the same layout the web interface renders to
+SVG. It reads through the daemon's HTTP API, so it can also watch a daemon on
+another machine.
+
 ## Migrating
 
 There is no automated import: the file formats have nothing in common. Recreating the

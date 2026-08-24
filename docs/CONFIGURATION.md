@@ -17,6 +17,9 @@ SmokePing.Net.exe --config config\smokeping.json --check
 | `dataDirectory` | `data` | Where the `.spd` databases live. Relative paths resolve against the configuration file |
 | `listenUrl` | `http://localhost:8081` | Address the web server binds to |
 
+The desktop client connects to this same address (`--server`), so a daemon that only
+listens on `localhost` can only be viewed from the machine it runs on.
+
 To reach the interface from other machines, bind to a specific address —
 `http://192.168.1.10:8081` — or to `http://+:8081` for every interface. Binding to
 `+` needs either administrator rights or a URL reservation:

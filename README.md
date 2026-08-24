@@ -7,6 +7,8 @@ built-in web server.
 
 ![](docs/screenshot-detail.svg)
 
+*A graph as served over HTTP. The desktop client draws the same picture natively.*
+
 ## Why
 
 SmokePing itself is Perl and depends on RRDtool, fping and a CGI-capable web server.
@@ -15,9 +17,10 @@ as a long-lived service on a Windows box. This is a from-scratch implementation 
 the same ideas with none of that baggage:
 
 * one self-contained executable, no Perl, no RRDtool, no fping, no web server;
-* **zero NuGet dependencies** — everything runs on the .NET shared framework;
+* **no NuGet dependencies** — everything runs on the .NET shared framework;
 * ICMP works without administrator rights on Windows (it uses the IP Helper API);
-* installs as a proper Windows service.
+* installs as a proper Windows service;
+* a native WinForms desktop client, as well as the web interface.
 
 The data model, the graph design, the loss colour scale and the alert pattern
 language all follow upstream, so graphs and alert rules are directly comparable with
@@ -40,6 +43,26 @@ Then open <http://localhost:8081>.
 
 The first graphs appear after one polling interval (five minutes by default) and get
 more interesting over the following hours.
+
+### The desktop client
+
+There are two interfaces, and they draw the same graphs from the same layout code:
+
+```powershell
+# Connect to a daemon that is already running (locally or on another machine)
+dotnet run --project src/SmokePing.Net.Desktop -- --server http://localhost:8081
+
+# Or run the daemon inside the desktop process, so one executable does everything
+dotnet run --project src/SmokePing.Net.Desktop -- --standalone config/smokeping.json
+```
+
+The client is a viewer: it reads through the daemon's HTTP API rather than opening
+the measurement files, because the daemon owns those and two processes writing the
+same round-robin file would corrupt it. That is also what lets it watch a daemon
+running on another machine.
+
+Graphs are drawn with GDI+ from the same `GraphScene` the web interface renders to
+SVG, so the two views cannot drift apart — only the drawing backend differs.
 
 ### Install as a Windows service
 
@@ -208,6 +231,20 @@ http://localhost:8081/api/graph/internet/cloudflare.svg?range=30h&theme=dark&wid
 ids, alert names that do not exist, and rounds too long to fit in their step — so a
 typo is caught at start-up rather than silently leaving a host unmonitored.
 
+## Project layout
+
+| Project | What it is |
+| --- | --- |
+| `src/SmokePing.Net` | The daemon: probes, storage, alerting, web interface. Runs anywhere .NET 8 does |
+| `src/SmokePing.Net.Desktop` | The native WinForms client. Windows only |
+| `tests/SmokePing.Net.Tests` | The test suite |
+
+Graph layout lives in `SmokeGraphLayout`, which produces a backend-independent scene.
+`SvgSceneWriter` turns that into SVG for the web interface and the HTTP API;
+`GdiSceneRenderer` draws the same scene with GDI+ in the desktop client. Adding a
+primitive to the layout is a compile-or-throw error in both backends, so neither view
+can quietly lose part of the picture.
+
 ## Building and testing
 
 ```bash
@@ -217,8 +254,17 @@ dotnet run --project tests/SmokePing.Net.Tests -- alert # run a subset
 ```
 
 The tests are a self-contained runner rather than xunit, for the same reason the
-application has no NuGet dependencies: the whole solution builds and tests on a
-machine with nothing installed but the .NET SDK.
+daemon has no NuGet dependencies: the daemon and its tests build on a machine with
+nothing installed but the .NET SDK.
+
+Building the desktop client on Windows needs nothing extra. Cross-building it from
+Linux or macOS works too — `EnableWindowsTargeting` is set — but that route restores
+the Windows Desktop targeting pack from NuGet, so it needs network access. To skip it
+entirely, build the two platform-independent projects instead of the solution:
+
+```bash
+dotnet build src/SmokePing.Net tests/SmokePing.Net.Tests
+```
 
 ## Licence
 
