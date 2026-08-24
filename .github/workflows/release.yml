@@ -38,7 +38,7 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y -qq rrdtool
 
       - name: Run tests
-        run: dotnet run --project tests/SmokePing.Net.Tests --configuration Release
+        run: dotnet test tests/SmokePing.Net.Tests --configuration Release --logger trx --results-directory test-results
 
       - name: Validate the sample configuration
         run: dotnet run --project src/SmokePing.Net --configuration Release -- --config "$PWD/config/smokeping.json" --check

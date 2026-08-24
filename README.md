@@ -14,8 +14,7 @@ On Windows that means WSL, Cygwin or a container — none of which are pleasant 
 as a long-lived service on a Windows box. This is a from-scratch implementation of
 the same ideas with none of that baggage:
 
-* one self-contained executable, no Perl, no RRDtool, no fping, no web server;
-* **no NuGet dependencies** — everything runs on the .NET shared framework;
+* one self-contained executable, no Perl, no RRDtool binary, no fping, no web server;
 * ICMP works without administrator rights on Windows (it uses the IP Helper API);
 * installs as a proper Windows service.
 
@@ -254,13 +253,18 @@ HTTP API serve.
 
 ```bash
 dotnet build SmokePing.Net.sln
-dotnet run --project tests/SmokePing.Net.Tests          # run every test
-dotnet run --project tests/SmokePing.Net.Tests -- alert # run a subset
+dotnet test                                   # run every test
+dotnet test --filter FullyQualifiedName~Alert # run a subset
 ```
 
-The tests are a self-contained runner rather than xunit, for the same reason the
-daemon has no NuGet dependencies: it builds and tests on a machine with nothing
-installed but the .NET SDK.
+Tests are xunit. Where `rrdtool` is on PATH the RRD tests use it as their oracle,
+checking compatibility in both directions; without it those tests skip themselves.
+
+Dependencies are deliberately few, and each replaces something better left unwritten:
+`Microsoft.Extensions.Hosting.WindowsServices` for the service control manager
+handshake, `DnsClient` for real DNS queries, `Serilog` for rolling log files, and
+xunit for the tests. The RRD reader, the graph renderer and the configuration parsers
+are all written here, because reproducing SmokePing exactly is the point of them.
 
 ## Licence
 

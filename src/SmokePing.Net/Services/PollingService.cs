@@ -17,8 +17,7 @@ public sealed class PollingService : BackgroundService
 {
     private readonly LoadedConfiguration _config;
     private readonly ProbeRegistry _probes;
-    private readonly DataStore _store;
-    private readonly RrdTargetStore? _rrdStore;
+    private readonly MeasurementStore _store;
     private readonly AlertEngine _alertEngine;
     private readonly AlertNotifier _notifier;
     private readonly HostResolver _hostResolver;
@@ -28,8 +27,7 @@ public sealed class PollingService : BackgroundService
     public PollingService(
         LoadedConfiguration config,
         ProbeRegistry probes,
-        DataStore store,
-        RrdTargetStore? rrdStore,
+        MeasurementStore store,
         AlertEngine alertEngine,
         AlertNotifier notifier,
         HostResolver hostResolver,
@@ -39,7 +37,6 @@ public sealed class PollingService : BackgroundService
         _config = config;
         _probes = probes;
         _store = store;
-        _rrdStore = rrdStore;
         _alertEngine = alertEngine;
         _notifier = notifier;
         _hostResolver = hostResolver;
@@ -56,16 +53,10 @@ public sealed class PollingService : BackgroundService
 
         // Open every database up front so a permissions or disk problem is reported
         // immediately rather than at the first round of some target hours later.
+        var now = _timeProvider.GetUtcNow().ToUnixTimeSeconds();
         foreach (var target in _config.Targets)
         {
-            if (_rrdStore is null)
-            {
-                _store.GetOrOpen(target);
-            }
-            else
-            {
-                _rrdStore.GetOrOpen(target, _timeProvider.GetUtcNow().ToUnixTimeSeconds());
-            }
+            _store.Open(target, now);
         }
 
         var loops = _config.Targets.Select(target => RunTargetAsync(target, stoppingToken));
@@ -75,7 +66,6 @@ public sealed class PollingService : BackgroundService
     private async Task RunTargetAsync(MeasuredTarget target, CancellationToken stoppingToken)
     {
         var probe = _probes.Get(target.ProbeType);
-        var database = _rrdStore is null ? _store.GetOrOpen(target) : null;
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -100,20 +90,12 @@ public sealed class PollingService : BackgroundService
                 }
 
                 var measurements = await probe.MeasureAsync(measured, stoppingToken).ConfigureAwait(false);
+                _store.Write(target, slotStart.Value, measurements);
+
+                // Recomputed here for the alert engine, which works from the sample
+                // rather than from whatever the store chose to keep.
                 var (sent, lost, median, quantiles) = Quantiles.Compute(measurements);
-
-                // Jitter depends on the order the probes came back in, which the
-                // stored quantiles do not preserve, so it is computed here.
                 var jitter = Jitter.Compute(measurements);
-
-                if (_rrdStore is not null)
-                {
-                    _rrdStore.Write(target, slotStart.Value, measurements);
-                }
-                else
-                {
-                    database!.Write(slotStart.Value, sent, lost, quantiles, jitter, median);
-                }
 
                 var sample = new Sample
                 {

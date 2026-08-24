@@ -4,19 +4,20 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <OutputType>Exe</OutputType>
     <RootNamespace>SmokePing.Net.Tests</RootNamespace>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <!--
-      This is a self-contained test runner rather than an xunit project: the whole
-      solution deliberately has no NuGet dependencies, so it builds and tests on a
-      machine with nothing but the .NET SDK installed.
-    -->
+    <IsPackable>false</IsPackable>
   </PropertyGroup>
 
   <ItemGroup>
     <!-- The application is an ASP.NET Core app; the tests reach into its service wiring. -->
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
   </ItemGroup>
 
   <ItemGroup>

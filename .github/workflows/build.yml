@@ -20,8 +20,14 @@ jobs:
       - name: Build daemon and tests
         run: dotnet build src/SmokePing.Net/SmokePing.Net.csproj tests/SmokePing.Net.Tests/SmokePing.Net.Tests.csproj --configuration Release
 
+      # rrdtool is the oracle for the RRD compatibility tests, which skip
+      # themselves without it.
+      - name: Install rrdtool
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq rrdtool
+        if: runner.os == 'Linux'
+
       - name: Run tests
-        run: dotnet run --project tests/SmokePing.Net.Tests --configuration Release --no-build
+        run: dotnet test tests/SmokePing.Net.Tests --configuration Release --no-build --logger trx --results-directory test-results
 
       - name: Validate the sample configuration
         run: dotnet run --project src/SmokePing.Net --configuration Release --no-build -- --config "$PWD/config/smokeping.json" --check
@@ -39,8 +45,14 @@ jobs:
       - name: Build the whole solution
         run: dotnet build SmokePing.Net.sln --configuration Release
 
+      # rrdtool is the oracle for the RRD compatibility tests, which skip
+      # themselves without it.
+      - name: Install rrdtool
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq rrdtool
+        if: runner.os == 'Linux'
+
       - name: Run tests
-        run: dotnet run --project tests/SmokePing.Net.Tests --configuration Release --no-build
+        run: dotnet test tests/SmokePing.Net.Tests --configuration Release --no-build --logger trx --results-directory test-results
 
       - name: Publish the daemon
         run: dotnet publish src/SmokePing.Net/SmokePing.Net.csproj --configuration Release --output publish/daemon
@@ -49,3 +61,9 @@ jobs:
         with:
           name: smokeping-net-windows
           path: publish/
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: test-results/

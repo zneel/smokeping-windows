@@ -9,8 +9,29 @@
     <InvariantGlobalization>true</InvariantGlobalization>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
-    <!-- No NuGet dependencies: the whole app runs on the shared framework. -->
     <NoWarn>$(NoWarn);CA1848</NoWarn>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      UseWindowsService talks to the service control manager properly, including the
+      status handshake it expects within seconds of start-up. Writing that by hand
+      means writing P/Invoke that cannot be exercised anywhere but a Windows service.
+      It is a no-op when the process is not running as one, so it is safe everywhere.
+    -->
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.0" />
+
+    <!-- The Event Log provider - where an administrator looks for a service - comes in
+         with the hosting package above, so it needs no reference of its own. -->
+
+    <!-- Rolling files, retention and structured output, rather than a hand-rolled logger. -->
+    <PackageReference Include="Serilog.Extensions.Hosting" Version="9.0.0" />
+    <PackageReference Include="Serilog.Sinks.Console" Version="6.0.0" />
+    <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
+
+    <!-- A real DNS client: record types, TCP fallback, EDNS - none of which a
+         hand-built query packet supports. -->
+    <PackageReference Include="DnsClient" Version="1.8.0" />
+  </ItemGroup>
 
 </Project>

@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using SmokePing.Net.Alerting;
 using SmokePing.Net.Configuration;
 using SmokePing.Net.Probes;
@@ -17,30 +18,26 @@ public static class ServiceRegistration
     /// writes to them and the web API reads from them, and a second instance would
     /// silently serve an empty view of the world.
     /// </summary>
+    /// <param name="poll">
+    /// Registers the measurement loop. Off for a web interface that only serves what
+    /// is already stored.
+    /// </param>
     public static IServiceCollection AddSmokePingServices(
         this IServiceCollection services,
-        LoadedConfiguration config)
+        LoadedConfiguration config,
+        bool poll = true)
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(config);
 
         services.AddSingleton(config);
         services.AddSingleton(TimeProvider.System);
-        // A native configuration brings its own archive table; otherwise the default
-        // plan applies, which is the same table upstream ships.
-        var plan = config.Raw.Database.Archives
-            .Where(archive => archive.Steps > 0 && archive.Rows > 0)
-            .Select(archive => (archive.Steps, archive.Rows))
-            .ToList();
 
-        services.AddSingleton(new DataStore(config.DataDirectory, plan));
+        // One store, whichever format is configured, so nothing downstream has to
+        // ask for a service that might not have been registered - an optional
+        // dependency the container cannot supply is a failure at request time.
+        services.AddSingleton(new MeasurementStore(config));
 
-        // RRDtool storage is opt-in: it is what lets an existing installation's files
-        // be used in place, at the cost of rewriting the whole file on every round.
-        if (config.Raw.Database.Format.Equals("rrd", StringComparison.OrdinalIgnoreCase))
-        {
-            services.AddSingleton(new RrdTargetStore(config.DataDirectory, plan));
-        }
         services.AddSingleton(new AlertEngine(config.Alerts));
         services.AddSingleton<AlertNotifier>();
         services.AddSingleton<HostResolver>();
@@ -56,6 +53,13 @@ public static class ServiceRegistration
         services.AddSingleton<IProbe, DnsProbe>();
         services.AddSingleton<IProbe, HttpProbe>();
         services.AddSingleton(sp => new ProbeRegistry(sp.GetRequiredService<IEnumerable<IProbe>>()));
+
+        // Registered here rather than at the call site so that building the container
+        // proves the polling loop's dependencies can actually be supplied.
+        if (poll)
+        {
+            services.AddHostedService<PollingService>();
+        }
 
         return services;
     }

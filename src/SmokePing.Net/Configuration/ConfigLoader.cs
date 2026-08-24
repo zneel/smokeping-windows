@@ -415,6 +415,11 @@ public static class ConfigLoader
             throw new ConfigurationException($"Target '{id}': packetSize must be between 12 and 64000.");
         }
 
+        if (settings.RecordType is { } recordType && !Probes.DnsProbe.IsKnownRecordType(recordType))
+        {
+            throw new ConfigurationException($"Target '{id}': '{recordType}' is not a DNS record type.");
+        }
+
         // A round that overruns its step is not fatal - the next round simply starts at
         // the following boundary and some are skipped - and upstream allows it, so this
         // is a warning rather than a refusal.
@@ -463,6 +468,7 @@ public static class ConfigLoader
             TimeoutMs = timeoutMs,
             Port = settings.Port,
             Query = settings.Query,
+            RecordType = settings.RecordType,
             Url = settings.Url,
             PacketSize = settings.PacketSize!.Value,
             AlertRules = ruleNames,
@@ -480,6 +486,7 @@ public static class ConfigLoader
         TimeoutMs = overrides?.TimeoutMs ?? inherited.TimeoutMs,
         Port = overrides?.Port ?? inherited.Port,
         Query = overrides?.Query ?? inherited.Query,
+        RecordType = overrides?.RecordType ?? inherited.RecordType,
         Url = overrides?.Url ?? inherited.Url,
         PacketSize = overrides?.PacketSize ?? inherited.PacketSize,
         AlertRules = overrides?.AlertRules ?? inherited.AlertRules,

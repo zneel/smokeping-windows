@@ -261,6 +261,11 @@ public static class SmokePingConfigTranslator
             settings.Query = query;
         }
 
+        if (section.Get("recordtype") is { Length: > 0 } recordType)
+        {
+            settings.RecordType = recordType;
+        }
+
         if (section.Get("urlformat") is { Length: > 0 } url)
         {
             settings.Url = url;

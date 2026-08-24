@@ -1,5 +1,6 @@
 using System.Net.Sockets;
 using Microsoft.AspNetCore.Builder;
+using Serilog;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -98,50 +99,28 @@ public static class Program
             }
         }
 
-        // Under the service control manager there is no console to attach to, and the
-        // SCM expects the process to report its state within seconds of starting.
-        if (options.RunAsService && OperatingSystem.IsWindows())
-        {
-            return WindowsServiceHost.Run(
-                options.ServiceName,
-                (stopToken, ready) => RunAsync(config, options, stopToken, ready));
-        }
-
-        return await RunAsync(config, options, CancellationToken.None, static () => { }).ConfigureAwait(false);
+        return await RunAsync(config, options).ConfigureAwait(false);
     }
 
-    private static async Task<int> RunAsync(
-        LoadedConfiguration config,
-        CommandLineOptions options,
-        CancellationToken stopToken,
-        Action onStarted)
+    private static async Task<int> RunAsync(LoadedConfiguration config, CommandLineOptions options)
     {
         var builder = WebApplication.CreateBuilder();
 
-        builder.Logging.ClearProviders();
-        builder.Logging.AddSimpleConsole(o =>
-        {
-            o.SingleLine = true;
-            o.TimestampFormat = "yyyy-MM-dd HH:mm:ss ";
-        });
+        ConfigureLogging(builder, config, options);
 
-        // A service has no console, so it needs somewhere durable to log.
-        var logFile = options.ResolveLogFile(config);
-        if (logFile is not null)
+        // Under the service control manager the process must answer the status
+        // handshake and stop on the SCM's signal rather than on Ctrl+C. This is a
+        // no-op when the process was started any other way.
+        if (options.RunAsService)
         {
-            builder.Logging.AddProvider(new FileLoggerProvider(logFile));
+            builder.Services.AddWindowsService(service => service.ServiceName = options.ServiceName);
         }
 
         // A native SmokePing configuration has no equivalent of listenUrl - upstream
         // serves through a CGI - so the command line has to be able to set it.
         builder.WebHost.UseUrls(options.ListenUrl ?? config.Raw.General.ListenUrl);
 
-        builder.Services.AddSmokePingServices(config);
-
-        if (!options.NoPolling)
-        {
-            builder.Services.AddHostedService<PollingService>();
-        }
+        builder.Services.AddSmokePingServices(config, poll: !options.NoPolling);
 
         var app = builder.Build();
 
@@ -193,21 +172,55 @@ public static class Program
                 return 1;
             }
 
-            onStarted();
-
-            // Stop on Ctrl+C or SIGTERM as usual, and also when the service control
-            // manager asks us to.
-            var lifetime = app.Services.GetRequiredService<IHostApplicationLifetime>();
-            await using var registration = stopToken.Register(lifetime.StopApplication).ConfigureAwait(false);
-
             await app.WaitForShutdownAsync(CancellationToken.None).ConfigureAwait(false);
             return 0;
         }
         finally
         {
-            app.Services.GetRequiredService<DataStore>().Dispose();
+            app.Services.GetRequiredService<MeasurementStore>().Dispose();
         }
     }
+
+    /// <summary>
+    /// Console always, a rolling file when one is wanted, and the Windows Event Log
+    /// under the service control manager - which is where an administrator looks.
+    /// </summary>
+    private static void ConfigureLogging(WebApplicationBuilder builder, LoadedConfiguration config, CommandLineOptions options)
+    {
+        var logger = new LoggerConfiguration()
+            .MinimumLevel.Information()
+            .MinimumLevel.Override("Microsoft.AspNetCore", Serilog.Events.LogEventLevel.Warning)
+            .Enrich.FromLogContext()
+            .WriteTo.Console(outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss} [{Level:u4}] {Message:lj}{NewLine}{Exception}");
+
+        if (options.ResolveLogFile(config) is { } logFile)
+        {
+            logger = logger.WriteTo.File(
+                logFile,
+                rollingInterval: RollingInterval.Day,
+                rollOnFileSizeLimit: true,
+                fileSizeLimitBytes: 8 * 1024 * 1024,
+                retainedFileCountLimit: 14,
+                outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss zzz} [{Level:u4}] {SourceContext}: {Message:lj}{NewLine}{Exception}");
+        }
+
+        builder.Logging.ClearProviders();
+        builder.Services.AddSerilog(logger.CreateLogger(), dispose: true);
+
+        if (options.RunAsService && OperatingSystem.IsWindows())
+        {
+            AddEventLog(builder, options.ServiceName);
+        }
+    }
+
+    /// <summary>
+    /// Separated out because the platform guard has to be on the method: the analyser
+    /// cannot see that a lambda passed from inside an OperatingSystem.IsWindows check
+    /// only ever runs there.
+    /// </summary>
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private static void AddEventLog(WebApplicationBuilder builder, string sourceName) =>
+        builder.Logging.AddEventLog(settings => settings.SourceName = sourceName);
 
     /// <summary>
     /// Digs the socket error out of the exception chain. Kestrel wraps it twice - in

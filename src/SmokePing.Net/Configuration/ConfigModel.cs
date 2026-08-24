@@ -84,6 +84,9 @@ public class TargetDefaults
     /// <summary>Name looked up by the DNS probe.</summary>
     public string? Query { get; set; }
 
+    /// <summary>Record type the DNS probe asks for: A, AAAA, MX, NS, TXT and so on.</summary>
+    public string? RecordType { get; set; }
+
     /// <summary>URL requested by the HTTP probe. Overrides Host when set.</summary>
     public string? Url { get; set; }
 
@@ -176,6 +179,9 @@ public sealed record MeasuredTarget
     public int? Port { get; init; }
 
     public string? Query { get; init; }
+
+    /// <summary>DNS record type, or null for the probe's default.</summary>
+    public string? RecordType { get; init; }
 
     public string? Url { get; init; }
 

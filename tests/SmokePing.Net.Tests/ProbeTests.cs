@@ -4,24 +4,27 @@ using SmokePing.Net.Configuration;
 using SmokePing.Net.Probes;
 using SmokePing.Net.Services;
 using SmokePing.Net.Storage;
+using Xunit;
 
 namespace SmokePing.Net.Tests;
 
-public static class ProbeTests
+public sealed class ProbeTests
 {
-    public static void Register(TestRunner runner)
+    /// <summary>HostResolver: a plain host is returned untouched</summary>
+    [Fact]
+    public void HostResolver_A_Plain_Host_Is_Returned_Untouched()
     {
-        runner.Add("HostResolver: a plain host is returned untouched", () =>
-        {
             var resolver = NewResolver();
 
-            Assert.Equal("1.1.1.1", resolver.Resolve("1.1.1.1"), "an address is not a token");
-            Assert.Equal("example.com", resolver.Resolve("example.com"), "nor is a host name");
-            Assert.False(HostResolver.IsToken("example.com"), "and it is not reported as one");
-        });
+            Verify.Equal("1.1.1.1", resolver.Resolve("1.1.1.1"), "an address is not a token");
+            Verify.Equal("example.com", resolver.Resolve("example.com"), "nor is a host name");
+            Verify.False(HostResolver.IsToken("example.com"), "and it is not reported as one");
+    }
 
-        runner.Add("HostResolver: the gateway token resolves to a real address", () =>
-        {
+    /// <summary>HostResolver: the gateway token resolves to a real address</summary>
+    [Fact]
+    public void HostResolver_The_Gateway_Token_Resolves_To_A_Real_Address()
+    {
             var resolved = NewResolver().Resolve(HostResolver.GatewayToken);
 
             // A machine with no default route is possible, so only assert the shape
@@ -31,86 +34,102 @@ public static class ProbeTests
                 return;
             }
 
-            Assert.True(IPAddress.TryParse(resolved, out _), $"'{resolved}' is a usable address");
-            Assert.False(resolved.StartsWith("169.254.", StringComparison.Ordinal), "a DHCP failure is not a gateway");
-            Assert.False(resolved is "0.0.0.0" or "::", "the all-zeroes placeholder is not a gateway");
-        });
+            Verify.True(IPAddress.TryParse(resolved, out _), $"'{resolved}' is a usable address");
+            Verify.False(resolved.StartsWith("169.254.", StringComparison.Ordinal), "a DHCP failure is not a gateway");
+            Verify.False(resolved is "0.0.0.0" or "::", "the all-zeroes placeholder is not a gateway");
+    }
 
-        runner.Add("HostResolver: tokens are recognised whatever the casing", () =>
-        {
-            Assert.True(HostResolver.IsToken("%gateway%"), "the gateway token");
-            Assert.True(HostResolver.IsToken("%GATEWAY%"), "in upper case too");
-            Assert.True(HostResolver.IsToken("%dns%"), "the dns token");
-            Assert.False(HostResolver.IsToken("%router%"), "an unknown token is not one of ours");
-        });
+    /// <summary>HostResolver: tokens are recognised whatever the casing</summary>
+    [Fact]
+    public void HostResolver_Tokens_Are_Recognised_Whatever_The_Casing()
+    {
+            Verify.True(HostResolver.IsToken("%gateway%"), "the gateway token");
+            Verify.True(HostResolver.IsToken("%GATEWAY%"), "in upper case too");
+            Verify.True(HostResolver.IsToken("%dns%"), "the dns token");
+            Verify.False(HostResolver.IsToken("%router%"), "an unknown token is not one of ours");
+    }
 
-        runner.Add("HostResolver: a resolved address is cached, not looked up per probe", () =>
-        {
+    /// <summary>HostResolver: a resolved address is cached, not looked up per probe</summary>
+    [Fact]
+    public void HostResolver_A_Resolved_Address_Is_Cached_Not_Looked_Up_Per_Probe()
+    {
             var resolver = NewResolver();
             var first = resolver.Resolve(HostResolver.GatewayToken);
             var second = resolver.Resolve(HostResolver.GatewayToken);
 
-            Assert.Equal(first, second, "the same address comes back within the cache window");
-        });
+            Verify.Equal(first, second, "the same address comes back within the cache window");
+    }
 
-        runner.Add("ProbeRegistry: probes resolve by their configuration name", () =>
-        {
+    /// <summary>ProbeRegistry: probes resolve by their configuration name</summary>
+    [Fact]
+    public void ProbeRegistry_Probes_Resolve_By_Their_Configuration_Name()
+    {
             using var httpClientFactory = new SimpleHttpClientFactory();
             var registry = new ProbeRegistry(
                 [new IcmpProbe(), new TcpProbe(), new DnsProbe(), new HttpProbe(httpClientFactory)]);
 
-            Assert.Equal("icmp", registry.Get("icmp").Name, "icmp resolves");
-            Assert.Equal("tcp", registry.Get("TCP").Name, "names are case insensitive");
-            Assert.True(registry.Contains("dns"), "dns is registered");
-            Assert.False(registry.Contains("carrier-pigeon"), "unknown probes are reported as missing");
-            Assert.Throws<KeyNotFoundException>(() => registry.Get("nope"), "and cannot be resolved");
-        });
+            Verify.Equal("icmp", registry.Get("icmp").Name, "icmp resolves");
+            Verify.Equal("tcp", registry.Get("TCP").Name, "names are case insensitive");
+            Verify.True(registry.Contains("dns"), "dns is registered");
+            Verify.False(registry.Contains("carrier-pigeon"), "unknown probes are reported as missing");
+            Verify.Throws<KeyNotFoundException>(() => registry.Get("nope"), "and cannot be resolved");
+    }
 
-        runner.Add("ProbeBase: every probe in a round is reported, failures included", () =>
-        {
+    /// <summary>ProbeBase: every probe in a round is reported, failures included</summary>
+    [Fact]
+    public async Task ProbeBase_Every_Probe_In_A_Round_Is_Reported_Failures_Included()
+    {
             var probe = new ScriptedProbe([12.0, null, 8.0]);
-            var results = probe.MeasureAsync(Target(pings: 3), CancellationToken.None).GetAwaiter().GetResult();
+            var results =await  probe.MeasureAsync(Target(pings: 3), CancellationToken.None);
 
-            Assert.Equal(3, results.Length, "one entry per probe sent");
-            Assert.Close(12.0, results[0]!.Value, 0.001, "the first measurement is kept");
-            Assert.True(results[1] is null, "a lost probe stays null");
-        });
+            Verify.Equal(3, results.Length, "one entry per probe sent");
+            Verify.Close(12.0, results[0]!.Value, 0.001, "the first measurement is kept");
+            Verify.True(results[1] is null, "a lost probe stays null");
+    }
 
-        runner.Add("ProbeBase: an exception becomes a lost probe, not a failed round", () =>
-        {
+    /// <summary>ProbeBase: an exception becomes a lost probe, not a failed round</summary>
+    [Fact]
+    public async Task ProbeBase_An_Exception_Becomes_A_Lost_Probe_Not_A_Failed_Round()
+    {
             var probe = new ScriptedProbe([10.0, null, 10.0], throwOnIndex: 1);
-            var results = probe.MeasureAsync(Target(pings: 3), CancellationToken.None).GetAwaiter().GetResult();
+            var results =await  probe.MeasureAsync(Target(pings: 3), CancellationToken.None);
 
-            Assert.Equal(3, results.Length, "the round completes");
-            Assert.True(results[1] is null, "the failing probe counts as loss");
-            Assert.Close(10.0, results[2]!.Value, 0.001, "later probes still run");
-        });
+            Verify.Equal(3, results.Length, "the round completes");
+            Verify.True(results[1] is null, "the failing probe counts as loss");
+            Verify.Close(10.0, results[2]!.Value, 0.001, "later probes still run");
+    }
 
-        runner.Add("ProbeBase: cancellation stops the round", () =>
-        {
+    /// <summary>ProbeBase: cancellation stops the round</summary>
+    [Fact]
+    public async Task ProbeBase_Cancellation_Stops_The_Round()
+    {
             using var cancellation = new CancellationTokenSource();
             cancellation.Cancel();
 
             var probe = new ScriptedProbe([10.0, 10.0]);
 
-            Assert.Throws<OperationCanceledException>(
-                () => probe.MeasureAsync(Target(pings: 2), cancellation.Token).GetAwaiter().GetResult(),
+            await Verify.ThrowsAsync<OperationCanceledException>(
+                () => probe.MeasureAsync(Target(pings: 2), cancellation.Token),
                 "a cancelled round does not silently return partial data");
-        });
+    }
 
-        runner.Add("ProbeBase: a round of results turns into a storable sample", () =>
-        {
+    /// <summary>ProbeBase: a round of results turns into a storable sample</summary>
+    [Fact]
+    public async Task ProbeBase_A_Round_Of_Results_Turns_Into_A_Storable_Sample()
+    {
             var probe = new ScriptedProbe([10.0, 20.0, null, 40.0]);
-            var results = probe.MeasureAsync(Target(pings: 4), CancellationToken.None).GetAwaiter().GetResult();
+            var results =await  probe.MeasureAsync(Target(pings: 4), CancellationToken.None);
             var (sent, lost, median, _) = Quantiles.Compute(results);
 
-            Assert.Equal(4, sent, "four probes were sent");
-            Assert.Equal(1, lost, "one was lost");
-            Assert.Close(20.0, median, 0.001, "the median is the middle of what came back");
-        });
+            Verify.Equal(4, sent, "four probes were sent");
+            Verify.Equal(1, lost, "one was lost");
+            Verify.Close(20.0, median, 0.001, "the median is the middle of what came back");
+    }
 
-        runner.Add("TcpProbe: a listening port is measured, a closed one is loss", () =>
-        {
+    /// <summary>TcpProbe: a listening port is measured, a closed one is loss</summary>
+    [Fact]
+    public async Task TcpProbe_A_Listening_Port_Is_Measured_A_Closed_One_Is_Loss()
+    {
             using var listener = new TcpListener(IPAddress.Loopback, 0);
             listener.Start();
             var port = ((IPEndPoint)listener.LocalEndpoint).Port;
@@ -118,31 +137,35 @@ public static class ProbeTests
             var probe = new TcpProbe();
             var target = Target(pings: 1, host: "127.0.0.1", port: port);
 
-            var measured = probe.MeasureAsync(target, CancellationToken.None).GetAwaiter().GetResult();
-            Assert.True(measured[0] is not null, "connecting to a listening port succeeds");
+            var measured =await  probe.MeasureAsync(target, CancellationToken.None);
+            Verify.True(measured[0] is not null, "connecting to a listening port succeeds");
 
             listener.Stop();
 
-            var refused = probe.MeasureAsync(target, CancellationToken.None).GetAwaiter().GetResult();
-            Assert.True(refused[0] is null, "connecting to a closed port counts as a lost probe");
-        });
+            var refused =await  probe.MeasureAsync(target, CancellationToken.None);
+            Verify.True(refused[0] is null, "connecting to a closed port counts as a lost probe");
+    }
 
-        runner.Add("Probes describe themselves for the graph subtitle", () =>
-        {
+    /// <summary>Probes describe themselves for the graph subtitle</summary>
+    [Fact]
+    public void Probes_Describe_Themselves_For_The_Graph_Subtitle()
+    {
             using var httpClientFactory = new SimpleHttpClientFactory();
 
-            Assert.Contains(new IcmpProbe().Describe(Target()), "ICMP", "the icmp probe names itself");
-            Assert.Contains(new TcpProbe().Describe(Target(port: 443)), "443", "the tcp probe names the port");
-            Assert.Contains(
+            Verify.Contains(new IcmpProbe().Describe(Target()), "ICMP", "the icmp probe names itself");
+            Verify.Contains(new TcpProbe().Describe(Target(port: 443)), "443", "the tcp probe names the port");
+            Verify.Contains(
                 new DnsProbe().Describe(Target(query: "example.com")),
                 "example.com",
                 "the dns probe names the query");
-            Assert.Contains(
+            Verify.Contains(
                 new HttpProbe(httpClientFactory).Describe(Target(url: "https://example.com/")),
                 "https://example.com/",
                 "the http probe names the url");
-        });
     }
+
+
+    
 
     private static HostResolver NewResolver() => new(
         Microsoft.Extensions.Logging.Abstractions.NullLogger<HostResolver>.Instance,

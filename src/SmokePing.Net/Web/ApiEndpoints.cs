@@ -24,29 +24,6 @@ public static partial class ApiEndpoints
         ("Last 360 Days", "360d"),
     ];
 
-    /// <summary>
-    /// Reads a period for a target from whichever store is configured, so the web
-    /// interface does not care which format the measurements are kept in.
-    /// </summary>
-    private static (IReadOnlyList<Storage.Sample> Samples, int StepSeconds) ReadSamples(
-        MeasuredTarget target,
-        DataStore store,
-        RrdTargetStore? rrdStore,
-        long from,
-        long to)
-    {
-        if (rrdStore is not null)
-        {
-            var file = rrdStore.GetOrOpen(target, to);
-            var archive = RrdTargetStore.SelectArchive(file, to - from);
-            return (rrdStore.Read(target, from, to), (int)file.RowStep(archive));
-        }
-
-        var database = store.GetOrOpen(target);
-        var index = database.SelectArchive(to - from);
-        return (database.Read(index, from, to), database.Archives[index].StepSeconds);
-    }
-
     public static void MapSmokePingApi(this IEndpointRouteBuilder app)
     {
         ArgumentNullException.ThrowIfNull(app);
@@ -80,10 +57,9 @@ public static partial class ApiEndpoints
             string id,
             string? range,
             LoadedConfiguration config,
-            DataStore store,
+            MeasurementStore store,
             ProbeRegistry probes,
-            HostResolver resolver,
-            RrdTargetStore? rrdStore = null) =>
+            HostResolver resolver) =>
         {
             if (!config.TryGetTarget(id, out var target))
             {
@@ -91,7 +67,7 @@ public static partial class ApiEndpoints
             }
 
             var (from, to) = ResolveRange(range);
-            var (samples, stepSeconds) = ReadSamples(target, store, rrdStore, from, to);
+            var (samples, stepSeconds) = store.Read(target, from, to);
             var statistics = GraphStatistics.Compute(samples);
 
             return Results.Ok(new
@@ -132,10 +108,9 @@ public static partial class ApiEndpoints
             string? title,
             string? subtitle,
             LoadedConfiguration config,
-            DataStore store,
+            MeasurementStore store,
             ProbeRegistry probes,
-            HostResolver resolver,
-            RrdTargetStore? rrdStore = null) =>
+            HostResolver resolver) =>
         {
             // The graph id carries a .svg suffix so it can be used directly in an <img>.
             id = id.EndsWith(".svg", StringComparison.OrdinalIgnoreCase) ? id[..^4] : id;
@@ -146,7 +121,7 @@ public static partial class ApiEndpoints
             }
 
             var (from, to) = ResolveRange(range);
-            var (samples, stepSeconds) = ReadSamples(target, store, rrdStore, from, to);
+            var (samples, stepSeconds) = store.Read(target, from, to);
 
             var request = new GraphRequest
             {
@@ -189,8 +164,7 @@ public static partial class ApiEndpoints
             string? range,
             int? entries,
             LoadedConfiguration config,
-            DataStore store,
-            RrdTargetStore? rrdStore = null) =>
+            MeasurementStore store) =>
         {
             var (from, to) = ResolveRange(range ?? "10h");
             var limit = Math.Clamp(entries ?? 5, 1, 50);
@@ -200,7 +174,7 @@ public static partial class ApiEndpoints
             // median over the window.
             var rows = config.Targets.Select(target =>
             {
-                var (samples, _) = ReadSamples(target, store, rrdStore, from, to);
+                var (samples, _) = store.Read(target, from, to);
                 var latest = samples.LastOrDefault(sample => sample.Sent > 0);
                 return new { target, statistics = GraphStatistics.Compute(samples), latest };
             })
@@ -249,10 +223,11 @@ public static partial class ApiEndpoints
             });
         });
 
-        app.MapGet("/api/health", (LoadedConfiguration config, DataStore store) => Results.Ok(new
+        app.MapGet("/api/health", (LoadedConfiguration config, MeasurementStore store) => Results.Ok(new
         {
             status = "ok",
             targets = config.Targets.Count,
+            storageFormat = store.Format,
             dataDirectory = store.DataDirectory,
             utcNow = DateTimeOffset.UtcNow,
         }));
