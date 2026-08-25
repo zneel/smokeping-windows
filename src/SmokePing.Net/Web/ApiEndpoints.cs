@@ -36,11 +36,13 @@ public static partial class ApiEndpoints
             owner = config.Raw.General.Owner,
             contactEmail = config.Raw.General.ContactEmail,
             detailRanges = DetailRanges.Select(r => new { label = r.Label, range = r.Range }),
-            live = new
+            trace = new
             {
-                enabled = config.Raw.Live.Enabled,
-                intervalMs = config.Raw.Live.IntervalMs,
-                minimumIntervalMs = config.Raw.Live.MinimumIntervalMs,
+                enabled = config.Targets.Any(t => t.Traced),
+                intervalSeconds = config.Raw.Trace.IntervalSeconds,
+                fineHours = config.Raw.Trace.FineHours,
+                coarseDays = config.Raw.Trace.CoarseDays,
+                ranges = TraceRanges.Select(r => new { label = r.Label, range = r.Range }),
             },
             menu = config.Menu,
             targetCount = config.Targets.Count,
@@ -231,73 +233,137 @@ public static partial class ApiEndpoints
             });
         });
 
-        // Server-sent events rather than a socket: the stream is one-way, it is a
-        // handful of numbers a second, and EventSource reconnects on its own.
-        app.MapGet("/api/live/{*id}", async (
+        // The recorded trace: what the link was actually doing, second by second,
+        // whether or not anybody was watching at the time.
+        app.MapGet("/api/trace/{*id}", (
             string id,
-            int? intervalMs,
-            HttpContext context,
+            string? range,
+            long? from,
+            long? to,
+            int? points,
             LoadedConfiguration config,
-            LiveProbeService live,
-            CancellationToken cancellationToken) =>
+            TraceStore traces) =>
         {
-            if (!config.Raw.Live.Enabled)
-            {
-                return Results.StatusCode(StatusCodes.Status403Forbidden);
-            }
-
             if (!config.TryGetTarget(id, out var target))
             {
                 return Results.NotFound(new { error = $"Unknown target '{id}'." });
             }
 
-            var interval = Math.Clamp(
-                intervalMs ?? config.Raw.Live.IntervalMs,
-                config.Raw.Live.MinimumIntervalMs,
-                60_000);
-
-            context.Response.Headers.ContentType = "text/event-stream";
-            context.Response.Headers.CacheControl = "no-cache";
-            context.Response.Headers["X-Accel-Buffering"] = "no";
-
-            try
+            if (!target.Traced)
             {
-                await foreach (var sample in live.WatchAsync(target, interval, cancellationToken))
+                return Results.NotFound(new { error = $"Target '{id}' is not traced." });
+            }
+
+            var (start, stop) = ResolveWindow(range, from, to);
+            var (samples, resolution) = traces.Read(target, start, stop);
+
+            // Peaks are found at the resolution they were recorded at and only then is
+            // the series thinned for drawing. Detecting on the thinned series would
+            // mean deciding what counts as a spike from data a spike has already been
+            // averaged out of.
+            var thresholds = TraceAnalysis.ComputeThresholds(samples, config.Raw.Trace.Spike);
+            var events = TraceAnalysis.FindEvents(samples, resolution, thresholds);
+            var summary = TraceAnalysis.Summarise(samples, events.Count);
+            var series = TraceAnalysis.Downsample(samples, Math.Clamp(points ?? 900, 50, 4000));
+
+            return Results.Ok(new
+            {
+                target.Id,
+                target.Title,
+                target.Host,
+                from = start,
+                to = stop,
+                resolutionSeconds = resolution,
+                columnSeconds = series.Count == 0 ? resolution : Math.Max(resolution, (stop - start) / series.Count),
+                recordedSeconds = samples.Count(s => s.HasData) * (long)resolution,
+                thresholds = new
                 {
-                    var payload = JsonSerializer.Serialize(new
-                    {
-                        t = sample.Timestamp,
-                        rtt = sample.RoundTripMilliseconds,
-                    });
-
-                    await context.Response.WriteAsync($"data: {payload}\n\n", cancellationToken);
-                    await context.Response.Body.FlushAsync(cancellationToken);
-                }
-            }
-            catch (InvalidOperationException ex)
-            {
-                // Too many sessions; say so in the stream rather than dropping it.
-                await context.Response.WriteAsync($"event: error\ndata: {JsonSerializer.Serialize(ex.Message)}\n\n", CancellationToken.None);
-            }
-            catch (OperationCanceledException)
-            {
-                // The browser navigated away, which is how a live view ends.
-            }
-
-            return Results.Empty;
+                    baselineMs = Round(thresholds.Baseline),
+                    roundTripMs = Round(thresholds.RoundTripMs),
+                    jitterBaselineMs = Round(thresholds.JitterBaseline),
+                    jitterMs = Round(thresholds.JitterMs),
+                },
+                summary = new
+                {
+                    summary.Sent,
+                    summary.Lost,
+                    lossPercent = Round(summary.LossPercent),
+                    medianMs = Round(summary.MedianRoundTrip),
+                    p95Ms = Round(summary.NinetyFifthRoundTrip),
+                    maxMs = Round(summary.MaximumRoundTrip),
+                    medianJitterMs = Round(summary.MedianJitter),
+                    maxJitterMs = Round(summary.MaximumJitter),
+                    summary.EventCount,
+                },
+                events = events.Select(e => new
+                {
+                    start = e.Start,
+                    end = e.End,
+                    e.DurationSeconds,
+                    peakMs = Round(e.PeakRoundTrip),
+                    peakJitterMs = Round(e.PeakJitter),
+                    e.Sent,
+                    e.Lost,
+                    e.Kinds,
+                    severity = Round(e.Severity),
+                }),
+                samples = series.Select(s => new
+                {
+                    t = s.Timestamp,
+                    s.Sent,
+                    s.Lost,
+                    min = Round(s.Minimum),
+                    avg = Round(s.Mean),
+                    max = Round(s.Maximum),
+                    jitter = Round(s.Jitter),
+                    jitterMax = Round(s.JitterMaximum),
+                }),
+            });
         });
 
-        app.MapGet("/api/health", (LoadedConfiguration config, MeasurementStore store, LiveProbeService live) => Results.Ok(new
+        app.MapGet("/api/health", (LoadedConfiguration config, MeasurementStore store, TraceStore traces) => Results.Ok(new
         {
             status = "ok",
             targets = config.Targets.Count,
             storageFormat = store.Format,
-            liveEnabled = config.Raw.Live.Enabled,
-            liveSessions = live.ActiveSessions,
+            tracedTargets = config.Targets.Count(t => t.Traced),
+            traceIntervalSeconds = traces.StepSeconds,
+            traceBytesPerTarget = traces.BytesPerTarget,
             dataDirectory = store.DataDirectory,
             utcNow = DateTimeOffset.UtcNow,
         }));
     }
+
+    /// <summary>Periods offered on the trace panel.</summary>
+    public static readonly (string Label, string Range)[] TraceRanges =
+    [
+        ("15 min", "15m"),
+        ("1 hour", "1h"),
+        ("3 hours", "3h"),
+        ("12 hours", "12h"),
+        ("24 hours", "24h"),
+    ];
+
+    /// <summary>
+    /// Resolves the window a trace request asks for. Explicit endpoints win over a
+    /// range, which is how clicking a peak zooms to the moment it happened rather than
+    /// to some period ending now.
+    /// </summary>
+    public static (long From, long To) ResolveWindow(string? range, long? from, long? to)
+    {
+        if (from is { } start && to is { } stop && stop > start)
+        {
+            return (start, stop);
+        }
+
+        var span = ParseSpan(range) ?? TimeSpan.FromMinutes(15);
+        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        return (now - (long)span.TotalSeconds, now);
+    }
+
+    /// <summary>Renders a millisecond figure for JSON, turning "no reading" into null.</summary>
+    private static double? Round(double value) =>
+        double.IsNaN(value) ? null : Math.Round(value, 2);
 
     /// <summary>
     /// Parses a range in SmokePing's notation - "3h", "30h", "10d", "360d", "2w" - and

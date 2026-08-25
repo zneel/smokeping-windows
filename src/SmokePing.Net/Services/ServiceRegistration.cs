@@ -41,7 +41,7 @@ public static class ServiceRegistration
         services.AddSingleton(new AlertEngine(config.Alerts));
         services.AddSingleton<AlertNotifier>();
         services.AddSingleton<HostResolver>();
-        services.AddSingleton<LiveProbeService>();
+        services.AddSingleton(new TraceStore(config));
 
         // Named clients rather than AddHttpClient<T>, which would re-register the
         // service type itself as transient and undo the singletons above. Separate
@@ -60,6 +60,11 @@ public static class ServiceRegistration
         if (poll)
         {
             services.AddHostedService<PollingService>();
+
+            // Same reasoning as the polling loop, and the recorder is no less a part
+            // of measuring: a web interface that only serves stored data records
+            // nothing, but a daemon records the seconds as well as the rounds.
+            services.AddHostedService<TraceRecorder>();
         }
 
         return services;

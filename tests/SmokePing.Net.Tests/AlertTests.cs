@@ -306,6 +306,7 @@ public sealed class AlertTests
         TimeoutMs = 1000,
         PacketSize = 56,
         AlertRules = alertRules,
+        Traced = false,
         ParentId = string.Empty,
     };
 

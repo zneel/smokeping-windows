@@ -94,9 +94,12 @@ a jitter chart this adds.
 probes, which upstream does not measure. It is stored at measurement time because the
 quantiles cannot reconstruct probe order.
 
-**Live view.** A once-a-second trace of a single target, streamed to the browser and
-never stored. Upstream has no equivalent: its resolution is the step, and the step is
-what the RRD archives are built around.
+**Second-by-second recording.** Every traced target is also recorded once a second to
+its own file, continuously, and the web interface reports the moments it misbehaved.
+Upstream has no equivalent: its resolution is the step, and the step is what the RRD
+archives are built around, so a disturbance shorter than a round is not merely hard to
+see — it was never recorded. This is kept apart from the measurement archives rather
+than shortening the step, so the graphs upstream draws stay the graphs upstream draws.
 
 **Dynamic hosts.** `%gateway%` and `%dns%` resolve at measurement time. Upstream has
 no equivalent; a gateway address has to be written into the configuration by hand.

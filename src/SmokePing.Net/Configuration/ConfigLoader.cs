@@ -156,6 +156,12 @@ public static class ConfigLoader
         var seenIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         var rootDefaults = Merge(BuiltInDefaults, raw.Defaults);
+
+        // Seeded here rather than consulted at the leaves, so that a target's own
+        // "trace" setting overrides the section for exactly the same reason its "step"
+        // overrides the defaults: it is the same inheritance, not a special case.
+        rootDefaults.Trace ??= raw.Trace.Enabled;
+        ValidateTrace(raw.Trace);
         var skipped = new List<string>();
         var warnings = new List<string>();
 
@@ -472,8 +478,55 @@ public static class ConfigLoader
             Url = settings.Url,
             PacketSize = settings.PacketSize!.Value,
             AlertRules = ruleNames,
+            Traced = settings.Trace!.Value,
             ParentId = parentId,
         };
+    }
+
+    /// <summary>
+    /// Checks the Trace section. The tiers are sized from these numbers, and a bad
+    /// combination would otherwise surface as an argument exception from deep inside
+    /// the store on the first probe rather than as a configuration error at start-up.
+    /// </summary>
+    private static void ValidateTrace(TraceConfig trace)
+    {
+        if (trace.IntervalSeconds is < 1 or > 3600)
+        {
+            throw new ConfigurationException("trace.intervalSeconds must be between 1 and 3600.");
+        }
+
+        if (trace.FineHours is < 1 or > 168)
+        {
+            throw new ConfigurationException("trace.fineHours must be between 1 and 168.");
+        }
+
+        if (trace.CoarseStepSeconds < trace.IntervalSeconds)
+        {
+            throw new ConfigurationException(
+                "trace.coarseStepSeconds must be at least trace.intervalSeconds.");
+        }
+
+        if (trace.CoarseStepSeconds % trace.IntervalSeconds != 0)
+        {
+            throw new ConfigurationException(
+                $"trace.coarseStepSeconds ({trace.CoarseStepSeconds}) must be a multiple of " +
+                $"trace.intervalSeconds ({trace.IntervalSeconds}).");
+        }
+
+        if (trace.CoarseDays is < 1 or > 3650)
+        {
+            throw new ConfigurationException("trace.coarseDays must be between 1 and 3650.");
+        }
+
+        if (trace.Spike.Deviations is < 0 or > 100)
+        {
+            throw new ConfigurationException("trace.spike.deviations must be between 0 and 100.");
+        }
+
+        if (trace.Spike.LatencyFloorMs < 0 || trace.Spike.JitterFloorMs < 0)
+        {
+            throw new ConfigurationException("trace.spike floors cannot be negative.");
+        }
     }
 
     /// <summary>Overlays the settings a node specifies on top of the ones it inherits.</summary>
@@ -488,6 +541,7 @@ public static class ConfigLoader
         Query = overrides?.Query ?? inherited.Query,
         RecordType = overrides?.RecordType ?? inherited.RecordType,
         Url = overrides?.Url ?? inherited.Url,
+        Trace = overrides?.Trace ?? inherited.Trace,
         PacketSize = overrides?.PacketSize ?? inherited.PacketSize,
         AlertRules = overrides?.AlertRules ?? inherited.AlertRules,
     };

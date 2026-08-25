@@ -7,9 +7,16 @@
     "listenUrl": "http://localhost:8081"
   },
 
-  // The once-a-second view on each target page. Sessions run only while somebody is
-  // watching, and nothing they measure is written to the database.
-  "live": { "enabled": true, "intervalMs": 1000 },
+  // The second-by-second trace, recorded continuously so a spike that happened while
+  // you were doing something else is still there when you come back to look. Full
+  // detail for a day; peaks kept for a month. About 4 MB per traced target, fixed.
+  "trace": {
+    "enabled": true,
+    "intervalSeconds": 1,
+    "fineHours": 24,
+    "coarseStepSeconds": 60,
+    "coarseDays": 30
+  },
 
   "defaults": {
     "probe": "icmp",
@@ -102,7 +109,11 @@
           "probe": "tcp",
           "port": 443,
           "pings": 10,
-          "pingIntervalMs": 1000
+          "pingIntervalMs": 1000,
+
+          // Traced targets cost a probe a second each. This one is here to show the
+          // setting; a web server does not need watching that closely.
+          "trace": false
         }
       ]
     }

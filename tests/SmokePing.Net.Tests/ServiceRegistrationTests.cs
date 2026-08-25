@@ -49,8 +49,13 @@ public sealed class ServiceRegistrationTests
 
                 var hosted = provider.GetServices<Microsoft.Extensions.Hosting.IHostedService>().ToList();
 
-                Verify.Equal(1, hosted.Count, $"the polling service is registered ({format})");
-                Verify.True(hosted[0] is PollingService, $"and it is the right one ({format})");
+                Verify.Equal(2, hosted.Count, $"the measuring services are registered ({format})");
+                Verify.True(
+                    hosted.Any(h => h is PollingService),
+                    $"the polling service is one of them ({format})");
+                Verify.True(
+                    hosted.Any(h => h is TraceRecorder),
+                    $"and the trace recorder is the other ({format})");
                 Verify.Equal(
                     format,
                     provider.GetRequiredService<MeasurementStore>().Format,

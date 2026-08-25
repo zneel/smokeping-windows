@@ -201,35 +201,68 @@ Each round stores the number of probes sent and lost, eleven quantiles of the
 round-trip times, and the jitter. Changing `step` or `pings` changes the record
 layout, so the previous database is renamed to `*.bak` and a fresh one started.
 
-## `live`
+## `trace`
 
-The once-a-second view offered on each target's page.
+The second-by-second recording.
 
 ```jsonc
-"live": {
-  "enabled": true,        // whether it may be started at all
-  "intervalMs": 1000,     // used when a request does not ask for one
-  "minimumIntervalMs": 200 // floor, so nobody can ask for a flood
+"trace": {
+  "enabled": true,          // whether targets are traced unless they say otherwise
+  "intervalSeconds": 1,     // seconds between recorded probes
+  "fineHours": 24,          // hours kept at full resolution
+  "coarseStepSeconds": 60,  // seconds per slot of the summary tier
+  "coarseDays": 30,         // days kept in the summary tier
+  "spike": {
+    "deviations": 4,        // how far above the window's own spread counts as a peak
+    "latencyFloorMs": 10,   // and by at least this much, whatever the spread
+    "jitterFloorMs": 5
+  }
 }
 ```
 
-At one probe a second a target is measured three hundred times as often as on the
-default five minute step, so it is worth knowing what limits apply. A session runs only
-while somebody is watching and stops when the last watcher leaves. Watchers of the same
-target share one session rather than each starting their own. At most twenty sessions
-run at once; the twenty-first is refused with a message rather than being queued.
+Unlike the live view it replaces, this runs whether or not anybody is looking. That is
+what makes it useful: a spike two seconds long happens while you are busy, and only a
+recording that was already running will still have it.
 
-Live measurements are never written to the database. The archives are built on a fixed
-step and a per-second sample has nowhere to go in them.
+`coarseStepSeconds` must be a multiple of `intervalSeconds`, and the summary tier keeps
+the **maximum** of each slot alongside its mean, so a single bad second stays visible
+in a summary covering a minute of good ones.
 
-The stream is server-sent events, so it can be consumed outside the browser too:
+### What it costs
+
+One probe a second per traced target, and a file whose size is fixed when it is
+created — nothing grows. At the defaults that is about 4.5 MB per target: 86 400
+seconds at full resolution plus 43 200 minutes of summary.
+
+Individual targets opt out with their own setting, inherited down the tree like every
+other one:
+
+```jsonc
+{ "id": "example-web", "host": "example.com", "trace": false }
+```
+
+### Peaks
+
+A moment is reported when a probe was lost, or when latency or jitter rose further
+above that window's own typical value than `deviations` times its spread — measured as
+a median absolute deviation, so the spikes being looked for do not inflate the number
+deciding whether they are unusual. The floors stop a very steady link reporting a peak
+every time it moves a millisecond.
+
+Consecutive bad readings are reported as one disturbance, and readings up to two
+samples apart are joined, so congestion that flickers does not read as a dozen
+separate problems. A gap in the recording is never bridged: nothing was measured
+there, so nothing can be claimed about it.
 
 ```
-curl -N http://localhost:8081/api/live/internet/cloudflare
-data: {"t":1787641746132,"rtt":0.2522}
+curl 'http://localhost:8081/api/trace/internet/cloudflare?range=1h'
 ```
 
-`?intervalMs=` overrides the interval, clamped between `minimumIntervalMs` and 60000.
+The response carries the thresholds it used, a summary of the window, the events it
+found, and the series thinned for drawing — thinned keeping each column's minimum and
+maximum, so a one-second spike still reaches the top of the chart. `?from=` and `?to=`
+in unix seconds ask for an exact window instead of a range, and `?points=` sets how
+many columns the series is thinned to.
 
 ## `alerts`
 

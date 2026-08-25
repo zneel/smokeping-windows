@@ -413,6 +413,7 @@ public sealed class RrdTests
         TimeoutMs = 1000,
         PacketSize = 56,
         AlertRules = [],
+        Traced = false,
         ParentId = "group",
     };
 

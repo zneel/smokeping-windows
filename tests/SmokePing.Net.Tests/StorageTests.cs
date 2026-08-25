@@ -482,6 +482,7 @@ public sealed class StorageTests
                 TimeoutMs = 1500,
                 PacketSize = 56,
                 AlertRules = [],
+                Traced = false,
                 ParentId = string.Empty,
             };
 

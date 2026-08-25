@@ -61,19 +61,36 @@ the loss colour key, and what took the measurements.
 That combination is the whole point of SmokePing: latency, jitter and loss in one
 picture, at a glance.
 
-### Live view
+### Second by second
 
-A target's page has a **Live** panel: one probe a second, drawn as it arrives.
+The archives answer *how is this link doing*. They cannot answer *what happened at
+21:43* — a round of twenty probes spread over five minutes has no idea which second
+was bad, and by design it throws that away.
 
-It is for the moment you are changing something and want to see the effect now, rather
-than in five minutes. Nothing it measures is recorded — the archives are built on a
-fixed step, and a per-second sample has nowhere to go in them without either
-misaligning the buckets or shortening the step until the retention collapses to hours.
-So the trace lives in memory for as long as somebody is watching.
+So each traced target is also **recorded once a second**, continuously, on disk. Its
+page has a panel showing that recording: latency, jitter and loss at full resolution,
+with the moments the link misbehaved listed underneath — when each started, how long
+it lasted, how bad it got, how many probes it dropped — and a button to look at any of
+them closely.
 
-Two people watching the same target share one stream rather than doubling the probing,
-and it stops the moment the last one closes the page. Turn it off entirely with
-`"live": { "enabled": false }`.
+The recording does not depend on anybody watching it. That is the entire point: the
+spike worth finding is the one that happened while you were playing a game, in a call,
+or asleep, and the only way to still have it afterwards is to have been recording
+before it started. Open the page an hour later and it is all there.
+
+Two things keep the peaks visible rather than smoothing them away:
+
+- **Summaries keep maxima.** Beyond the first day the recording is folded into
+  one-minute slots, and each keeps its worst reading as well as its mean. A minute of
+  10 ms with one 400 ms stall in it has a mean of 16 ms — indistinguishable from a
+  slightly busy link. The maximum still says 400 ms.
+- **Thresholds come from the window.** What counts as a peak is derived from how that
+  link normally behaves, so 60 ms is reported on a 5 ms LAN and ignored on a 55 ms
+  transatlantic hop. A fixed limit has to be wrong about one of them.
+
+A traced target costs one probe a second and about 4.5 MB, fixed — a day at full
+resolution and a month of summarised peaks. Set `"trace": false` on a target to leave
+it out, or `"trace": { "enabled": false }` to record nothing at all.
 
 ### Jitter
 
@@ -231,6 +248,7 @@ plain SVG, so it can be dropped straight into a dashboard, a wiki or an e-mail.
 | `GET /api/graph/{id}.svg?range=3h` | A rendered graph |
 | `GET /api/charts?range=10h` | Top-N by std deviation, max, loss and median |
 | `GET /api/alerts` | Rules, active alerts and recent notifications |
+| `GET /api/trace/{id}?range=1h` | The recorded second-by-second trace, with its peaks |
 | `GET /api/health` | Liveness and target count |
 
 Graph parameters: `range` (`90m`, `3h`, `10d`, `2w`, `6mon`, `1y`), `width`, `height`,

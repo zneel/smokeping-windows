@@ -13,8 +13,8 @@ public sealed class SmokePingConfig
     /// <summary>Storage settings, taken from the Database section of a native configuration.</summary>
     public DatabaseConfig Database { get; set; } = new();
 
-    /// <summary>Settings for the live, once-a-second view.</summary>
-    public LiveConfig Live { get; set; } = new();
+    /// <summary>Settings for the continuously recorded, second-by-second trace.</summary>
+    public TraceConfig Trace { get; set; } = new();
 
     /// <summary>The target hierarchy. Nodes without a host act as menu folders.</summary>
     public List<TargetNode> Targets { get; set; } = [];
@@ -48,20 +48,58 @@ public sealed class DatabaseConfig
     public List<ArchiveConfig> Archives { get; set; } = [];
 }
 
-/// <summary>Settings for the live, once-a-second view.</summary>
-public sealed class LiveConfig
+/// <summary>
+/// Settings for the recorded trace: one probe a second, kept on disk.
+///
+/// This runs whether or not anybody is looking at it, which is the point. A spike
+/// that lasts two seconds happens while you are busy, and the only way to still have
+/// it afterwards is to have been recording before it started.
+/// </summary>
+public sealed class TraceConfig
 {
     /// <summary>
-    /// Whether the live view may be started at all. It probes far harder than the
-    /// normal schedule, so an installation that does not want that can refuse it.
+    /// Whether targets are traced by default. Individual targets can opt in or out
+    /// with their own <c>trace</c> setting.
     /// </summary>
     public bool Enabled { get; set; } = true;
 
-    /// <summary>Interval used when a request does not ask for one.</summary>
-    public int IntervalMs { get; set; } = 1000;
+    /// <summary>Seconds between recorded probes.</summary>
+    public int IntervalSeconds { get; set; } = 1;
 
-    /// <summary>Floor on the requested interval, so nobody can ask for a flood.</summary>
-    public int MinimumIntervalMs { get; set; } = 200;
+    /// <summary>Hours kept at full resolution.</summary>
+    public int FineHours { get; set; } = 24;
+
+    /// <summary>Seconds covered by one slot of the summary tier.</summary>
+    public int CoarseStepSeconds { get; set; } = 60;
+
+    /// <summary>
+    /// Days kept in the summary tier. It stores the maximum as well as the mean, so a
+    /// spike stays visible long after the second that held it has been overwritten.
+    /// </summary>
+    public int CoarseDays { get; set; } = 30;
+
+    /// <summary>How a moment counts as a peak worth listing.</summary>
+    public SpikeConfig Spike { get; set; } = new();
+}
+
+/// <summary>
+/// What counts as a peak.
+///
+/// Thresholds are derived from the window being looked at rather than fixed, because
+/// "slow" means something different on a 4 ms LAN and a 90 ms transatlantic hop. The
+/// floors stop a very steady link from reporting a peak every time it moves a
+/// millisecond.
+/// </summary>
+public sealed class SpikeConfig
+{
+    /// <summary>How far above the window's own typical spread a reading must sit.</summary>
+    public double Deviations { get; set; } = 4;
+
+    /// <summary>A latency peak must also exceed the baseline by at least this many milliseconds.</summary>
+    public double LatencyFloorMs { get; set; } = 10;
+
+    /// <summary>A jitter peak must also exceed its baseline by at least this many milliseconds.</summary>
+    public double JitterFloorMs { get; set; } = 5;
 }
 
 public sealed class GeneralConfig
@@ -114,6 +152,12 @@ public class TargetDefaults
 
     /// <summary>Names of the alert rules applied to this target.</summary>
     public List<string>? AlertRules { get; set; }
+
+    /// <summary>
+    /// Whether to record a second-by-second trace of this target. Inherited like every
+    /// other setting; unset means whatever the Trace section says.
+    /// </summary>
+    public bool? Trace { get; set; }
 }
 
 /// <summary>A node in the target hierarchy.</summary>
@@ -207,6 +251,9 @@ public sealed record MeasuredTarget
     public required int PacketSize { get; init; }
 
     public required IReadOnlyList<string> AlertRules { get; init; }
+
+    /// <summary>True when this target is recorded second by second.</summary>
+    public required bool Traced { get; init; }
 
     /// <summary>Menu path of the parent node, empty for top-level targets.</summary>
     public required string ParentId { get; init; }

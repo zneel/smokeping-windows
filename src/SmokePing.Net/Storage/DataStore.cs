@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Text;
 using SmokePing.Net.Configuration;
 
 namespace SmokePing.Net.Storage;
@@ -73,36 +72,7 @@ public sealed class DataStore : IDisposable
     }
 
     /// <summary>Maps a slash-separated target id to a file below the data directory.</summary>
-    public string ResolvePath(string targetId)
-    {
-        var segments = targetId.Split('/', StringSplitOptions.RemoveEmptyEntries)
-            .Select(SanitiseSegment)
-            .ToArray();
-
-        if (segments.Length == 0)
-        {
-            throw new ArgumentException("Target id must contain at least one path segment.", nameof(targetId));
-        }
-
-        return Path.Combine([_dataDirectory, .. segments[..^1], segments[^1] + ".spd"]);
-    }
-
-    /// <summary>
-    /// Strips anything that is not safe in a file name. Target ids are already
-    /// validated at configuration load time; this is defence in depth against
-    /// path traversal from a hand-edited configuration file.
-    /// </summary>
-    private static string SanitiseSegment(string segment)
-    {
-        var builder = new StringBuilder(segment.Length);
-        foreach (var c in segment)
-        {
-            builder.Append(char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.' ? c : '_');
-        }
-
-        var result = builder.ToString().Trim('.');
-        return result.Length == 0 ? "_" : result;
-    }
+    public string ResolvePath(string targetId) => TargetPaths.Resolve(_dataDirectory, targetId, ".spd");
 
     public void Dispose()
     {

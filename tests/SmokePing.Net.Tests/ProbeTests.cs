@@ -191,6 +191,7 @@ public sealed class ProbeTests
         Url = url,
         PacketSize = 56,
         AlertRules = [],
+        Traced = false,
         ParentId = string.Empty,
     };
 
