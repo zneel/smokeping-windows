@@ -117,15 +117,25 @@ jobs:
 
           Then open http://localhost:8081.
 
-          ### Live view
+          ### Second by second
 
-          Each target's page has a **Live** panel: one probe a second, drawn as it arrives, for
-          when you are changing something and want to see the effect now rather than at the next
-          round. Nothing it measures is recorded — the stored graphs keep their own schedule.
+          The five-minute graphs answer *how is this link doing*. They cannot answer *what
+          happened at 21:43* — a round of twenty probes spread over five minutes has no idea
+          which second was bad.
 
-          Sessions run only while somebody is watching and stop when the last one leaves; watchers
-          of the same target share one. Turn it off with `"live": { "enabled": false }`. It is also
-          plain server-sent events, so `curl -N http://localhost:8081/api/live/<target>` works.
+          So each target is also **recorded once a second, continuously, on disk**, and its page
+          lists the moments the link misbehaved: when each started, how long it lasted, how bad
+          it got, how many probes it dropped, with a button to look at any of them closely.
+
+          It does not depend on anybody watching. That is the point — the spike worth finding is
+          the one that happened while you were playing a game or on a call, and only a recording
+          that was already running will still have it. Summaries keep maxima rather than
+          averaging them away, and what counts as a peak is derived from how that link normally
+          behaves, so 60 ms is reported on a 5 ms LAN and ignored on a 55 ms transatlantic hop.
+
+          A traced target costs one probe a second and about 4.5 MB, fixed: a day at full
+          resolution, a month of summarised peaks. Set `"trace": false` on a target to leave it
+          out. `curl 'http://localhost:8081/api/trace/<target>?range=1h'` returns the same data.
 
           ### Coming from an existing SmokePing
 
