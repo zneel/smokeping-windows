@@ -117,6 +117,16 @@ jobs:
 
           Then open http://localhost:8081.
 
+          ### Live view
+
+          Each target's page has a **Live** panel: one probe a second, drawn as it arrives, for
+          when you are changing something and want to see the effect now rather than at the next
+          round. Nothing it measures is recorded — the stored graphs keep their own schedule.
+
+          Sessions run only while somebody is watching and stop when the last one leaves; watchers
+          of the same target share one. Turn it off with `"live": { "enabled": false }`. It is also
+          plain server-sent events, so `curl -N http://localhost:8081/api/live/<target>` works.
+
           ### Coming from an existing SmokePing
 
           Point it at the configuration you already have — `*** Targets ***`, `+`/`++` hierarchy,
