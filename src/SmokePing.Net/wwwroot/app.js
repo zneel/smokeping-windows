@@ -211,7 +211,12 @@ async function renderTarget(id) {
           </span>
         </h3>
         <p class="trace-readout" id="trace-readout">Loading&hellip;</p>
-        <svg id="trace-chart" class="trace-chart" viewBox="0 0 900 268"></svg>
+        <p class="trace-hover" id="trace-hover">&nbsp;</p>
+        <div class="trace-plots">
+          <div id="trace-latency"></div>
+          <div id="trace-jitter"></div>
+          <div id="trace-loss"></div>
+        </div>
         <div id="trace-events" class="trace-events"></div>
         <p class="trace-note">Recorded continuously at one probe every
           ${state.config.trace.intervalSeconds}s, whether or not this page is open, so a spike
@@ -224,7 +229,7 @@ async function renderTarget(id) {
         <div class="graph" data-range="${r.range}"></div>
       </div>`).join('')}`;
 
-  if (document.getElementById('trace-chart')) {
+  if (document.getElementById('trace-latency')) {
     startTrace(id);
   }
 
@@ -348,6 +353,10 @@ function startTrace(id) {
     to: null,
     scale: localStorage.getItem('smokeping-trace-scale') || 'auto',
     timer: null,
+    charts: [],
+    resize: null,
+    data: null,
+    drawnAsLog: null,
   };
 
   for (const button of document.querySelectorAll('.trace-ranges button[data-range]')) {
@@ -377,6 +386,7 @@ function startTrace(id) {
 function stopTrace() {
   if (!trace) return;
   clearTimeout(trace.timer);
+  destroyTraceCharts();
   trace = null;
 }
 
@@ -419,7 +429,8 @@ async function loadTrace() {
     button.classList.toggle('active', !current.from && button.dataset.range === current.range);
   }
 
-  drawTrace(data);
+  updateTraceCharts(data);
+  renderTraceSummary(data);
   renderTraceEvents(data);
 
   // Only a recent window is worth refetching; anything older is not changing, and a
@@ -440,120 +451,282 @@ function traceUsesLog(data) {
     data.summary.maxMs > data.summary.medianMs * 8;
 }
 
-function drawTrace(data) {
-  const chart = document.getElementById('trace-chart');
-  if (!chart) return;
+/** Turns the API's row-per-second into the column-per-series arrays uPlot wants. */
+function traceColumns(data) {
+  const t = [];
+  const max = [];
+  const min = [];
+  const avg = [];
+  const jitter = [];
+  const jitterMax = [];
+  const loss = [];
 
-  const left = 52;
-  const right = 894;
-  const width = right - left;
-  const latencyTop = 10;
-  const latencyBottom = 150;
-  const jitterTop = 174;
-  const jitterBottom = 216;
-  const lossTop = 222;
-  const lossBottom = 240;
+  for (const s of data.samples) {
+    t.push(s.t);
+    max.push(s.max);
+    min.push(s.min);
+    avg.push(s.avg);
+    jitter.push(s.jitter);
+    jitterMax.push(s.jitterMax);
+    // Null rather than zero where nothing was measured: a flat zero would claim a
+    // clean second, and a gap is not a clean second.
+    loss.push(s.sent ? (s.lost / s.sent) * 100 : null);
+  }
 
-  const samples = data.samples;
+  return {
+    latency: [t, max, min, avg],
+    jitter: [t, jitterMax, jitter],
+    loss: [t, loss],
+  };
+}
+
+/** The palette, read from the stylesheet so the charts follow the theme. */
+function traceTheme() {
+  const style = getComputedStyle(document.documentElement);
+  const read = (name, fallback) => (style.getPropertyValue(name) || fallback).trim();
+  return {
+    accent: read('--accent', '#4da3ff'),
+    danger: read('--danger', '#ff5d5d'),
+    muted: read('--muted', '#98a2b3'),
+    border: read('--border', '#262d38'),
+    jitter: '#c58af9',
+  };
+}
+
+/**
+ * Builds the three plots.
+ *
+ * Separate charts rather than one with three axes, sharing a cursor: latency, jitter
+ * and loss are measured in different units and read at different scales, and stacking
+ * them keeps each one's shape legible while the crosshair still lines the three up at
+ * the same instant.
+ */
+function buildTraceCharts(data) {
+  destroyTraceCharts();
+
+  const columns = traceColumns(data);
+  if (columns.latency[0].length < 2) return;
+
+  const theme = traceTheme();
+  const width = document.querySelector('.trace-plots').clientWidth || 900;
   const useLog = traceUsesLog(data);
   document.getElementById('trace-scale').textContent = useLog ? 'log' : 'linear';
 
-  const span = Math.max(1, data.to - data.from);
-  const x = (t) => left + ((t - data.from) / span) * width;
-  const columnWidth = Math.max(width / Math.max(samples.length, 1), 0.8);
-
-  const peak = Math.max(data.summary.maxMs || 0, data.thresholds.roundTripMs || 0, 1);
-  const floor = useLog ? Math.max(0.1, Math.min(...samples.filter((s) => s.min !== null).map((s) => s.min), peak) * 0.8) : 0;
-  const top = peak * 1.1;
-
-  const scaleY = (v) => {
-    if (v === null || v === undefined) return null;
-    const height = latencyBottom - latencyTop;
-    if (!useLog) return latencyBottom - Math.min(v / top, 1) * height;
-    const lo = Math.log10(floor);
-    const fraction = (Math.log10(Math.max(v, floor)) - lo) / (Math.log10(top) - lo);
-    return latencyBottom - Math.min(Math.max(fraction, 0), 1) * height;
-  };
-
-  const jitterPeak = Math.max(data.summary.maxJitterMs || 0, data.thresholds.jitterMs || 0, 1) * 1.1;
-  const jitterY = (v) => jitterBottom - Math.min((v || 0) / jitterPeak, 1) * (jitterBottom - jitterTop);
-
-  const parts = [];
-
-  // Gridlines first, so nothing measured is drawn underneath them.
-  for (const tick of axisTicks(floor, top, useLog)) {
-    const ty = scaleY(tick);
-    parts.push(`<line x1="${left}" y1="${ty.toFixed(1)}" x2="${right}" y2="${ty.toFixed(1)}" class="trace-grid"/>`);
-    parts.push(`<text x="${left - 6}" y="${(ty + 3.5).toFixed(1)}" class="trace-label" text-anchor="end">${formatTick(tick)}</text>`);
-  }
-
-  parts.push(`<text x="${left - 6}" y="${latencyTop}" class="trace-label" text-anchor="end">ms</text>`);
-
-  // The threshold: everything above this line is what the peak list is reporting.
-  if (data.thresholds.roundTripMs) {
-    const ty = scaleY(data.thresholds.roundTripMs);
-    parts.push(`<line x1="${left}" y1="${ty.toFixed(1)}" x2="${right}" y2="${ty.toFixed(1)}" class="trace-threshold"/>`);
-  }
-
-  // The min-max envelope, so a column covering many probes still shows its worst one.
-  const upper = [];
-  const lower = [];
-  const flushEnvelope = () => {
-    if (upper.length > 1) {
-      parts.push(`<path d="M${upper.join('L')}L${lower.reverse().join('L')}Z" class="trace-envelope"/>`);
-    }
-    upper.length = 0;
-    lower.length = 0;
-  };
-
-  for (const s of samples) {
-    if (s.max === null || s.min === null) {
-      flushEnvelope();
-      continue;
-    }
-    upper.push(`${x(s.t).toFixed(1)},${scaleY(s.max).toFixed(1)}`);
-    lower.push(`${x(s.t).toFixed(1)},${scaleY(s.min).toFixed(1)}`);
-  }
-  flushEnvelope();
-
-  parts.push(...brokenLine(samples, (s) => s.avg, x, scaleY, 'trace-line'));
-  parts.push(...brokenLine(samples, (s) => s.jitterMax, x, jitterY, 'trace-jitter'));
-
-  // Loss last and on its own strip: it is the one thing that should never be missed.
-  for (const s of samples) {
-    if (!s.lost) continue;
-    const height = (lossBottom - lossTop) * Math.min(s.lost / Math.max(s.sent, 1), 1);
-    parts.push(`<rect x="${x(s.t).toFixed(1)}" y="${(lossBottom - height).toFixed(1)}" width="${columnWidth.toFixed(1)}" height="${height.toFixed(1)}" class="trace-loss"/>`);
-  }
-
-  parts.push(`<line x1="${left}" y1="${lossBottom}" x2="${right}" y2="${lossBottom}" class="trace-grid"/>`);
-  parts.push(`<text x="${left - 6}" y="${jitterBottom}" class="trace-label" text-anchor="end">jitter</text>`);
-  parts.push(`<text x="${left - 6}" y="${lossBottom}" class="trace-label" text-anchor="end">loss</text>`);
-
-  const times = timeTicks(data.from, data.to);
-  times.forEach((t, i) => {
-    // The end labels sit on the plot's edges, so centring them would push half of
-    // each outside the drawing and the clock would read "07:52:4".
-    const anchor = i === 0 ? 'start' : (i === times.length - 1 ? 'end' : 'middle');
-    parts.push(`<text x="${x(t).toFixed(1)}" y="258" class="trace-label" text-anchor="${anchor}">${formatClock(t, span)}</text>`);
+  const msAxis = (label) => ({
+    size: 58,
+    label,
+    labelSize: 16,
+    values: (u, values) => values.map(formatAxisMs),
   });
 
-  chart.innerHTML = parts.join('');
+  const axis = (extra = {}) => ({
+    stroke: theme.muted,
+    grid: { stroke: theme.border, width: 1 },
+    ticks: { stroke: theme.border, width: 1 },
+    font: '11px "Segoe UI", system-ui, sans-serif',
+    labelFont: '11px "Segoe UI", system-ui, sans-serif',
+    labelGap: 2,
+    ...extra,
+  });
 
-  const s = data.summary;
-  const label = describeWindow(data);
-  document.getElementById('trace-readout').innerHTML = [
-    `<strong>${s.eventCount}</strong> peak${s.eventCount === 1 ? '' : 's'} in ${label}`,
-    `median ${formatMs(s.medianMs)}`,
-    `95th ${formatMs(s.p95Ms)}`,
-    `worst ${formatMs(s.maxMs)}`,
-    `jitter ${formatMs(s.medianJitterMs)} / ${formatMs(s.maxJitterMs)} worst`,
-    `loss ${s.lossPercent === null ? '-' : s.lossPercent.toFixed(2)}% of ${s.sent}`,
-    `above ${formatMs(data.thresholds.roundTripMs)} counts`,
-    // Said out loud when it is not one second, because at summary resolution a
-    // two-second stall is reported as the whole slot that contained it.
-    ...(data.resolutionSeconds > 1 ? [`summarised ${data.resolutionSeconds}s at a time`] : []),
-  ].join(' &middot; ');
+  // Drag across any of the three to zoom. The window is refetched rather than merely
+  // rescaled, so zooming into two minutes of a day-long view returns the seconds
+  // themselves instead of magnifying the summary that replaced them.
+  const zoomOnSelect = (u) => {
+    if (u.select.width < 4) return;
+    const from = Math.round(u.posToVal(u.select.left, 'x'));
+    const to = Math.round(u.posToVal(u.select.left + u.select.width, 'x'));
+    u.setSelect({ left: 0, width: 0, top: 0, height: 0 }, false);
+    if (to > from) zoomTrace(from, to);
+  };
+
+  const common = (height, extra) => ({
+    width,
+    height,
+    cursor: {
+      // One key across the three, so the crosshair is at the same instant in all of
+      // them; that is what makes "the latency spike and the loss are the same event"
+      // readable rather than a guess.
+      sync: { key: 'trace', scales: ['x', null] },
+      drag: { x: true, y: false },
+      // Vertical only. A horizontal crosshair here reads as a threshold line - which
+      // is a thing these charts genuinely have - and means nothing on a loss axis.
+      y: false,
+    },
+    legend: { show: false },
+    hooks: { setSelect: [zoomOnSelect], setCursor: [showTraceCursor] },
+    ...extra,
+  });
+
+  trace.charts = [
+    new uPlot(
+      common(210, {
+        scales: { y: { distr: useLog ? 3 : 1 } },
+        // The clock is drawn once, under the bottom plot: the three share an x range,
+        // and repeating it between them would separate charts meant to be read together.
+        axes: [axis({ show: false }), axis(msAxis('round trip ms'))],
+        // Filled between the fastest and slowest reading each column covers, so an
+        // aggregated column shows its whole spread instead of only its average.
+        bands: [{ series: [1, 2], fill: withAlpha(theme.accent, 0.2) }],
+        series: [
+          {},
+          { label: 'slowest', stroke: withAlpha(theme.accent, 0.55), width: 1 },
+          { label: 'fastest', stroke: withAlpha(theme.accent, 0.55), width: 1 },
+          { label: 'typical', stroke: theme.accent, width: 1.6 },
+        ],
+        plugins: [thresholdLine(data.thresholds.roundTripMs, theme.danger)],
+      }),
+      columns.latency,
+      document.getElementById('trace-latency')),
+
+    new uPlot(
+      common(104, {
+        axes: [axis({ show: false }), axis(msAxis('jitter ms'))],
+        bands: [{ series: [1, 2], fill: withAlpha(theme.jitter, 0.18) }],
+        series: [
+          {},
+          { label: 'worst jitter', stroke: withAlpha(theme.jitter, 0.6), width: 1 },
+          { label: 'jitter', stroke: theme.jitter, width: 1.4 },
+        ],
+        plugins: [thresholdLine(data.thresholds.jitterMs, theme.danger)],
+      }),
+      columns.jitter,
+      document.getElementById('trace-jitter')),
+
+    new uPlot(
+      common(98, {
+        scales: { y: { range: [0, 100] } },
+        axes: [
+          axis(),
+          axis({ size: 58, label: 'loss', labelSize: 16, values: (u, v) => v.map((x) => `${x}%`) }),
+        ],
+        series: [
+          {},
+          {
+            label: 'loss',
+            stroke: theme.danger,
+            fill: withAlpha(theme.danger, 0.5),
+            // Bars, not a line: loss is a count of things that did not happen at a
+            // moment, and joining those moments with a slope invents the ones between.
+            paths: uPlot.paths.bars({ size: [1, 8] }),
+          },
+        ],
+      }),
+      columns.loss,
+      document.getElementById('trace-loss')),
+  ];
+
+  // uPlot draws to a canvas of a fixed pixel size, so the width has to be handed to
+  // it again whenever the column it lives in changes.
+  trace.resize = new ResizeObserver(() => {
+    const w = document.querySelector('.trace-plots')?.clientWidth;
+    if (w) trace.charts.forEach((u) => u.setSize({ width: w, height: u.height }));
+  });
+  trace.resize.observe(document.querySelector('.trace-plots'));
+}
+
+/** Redraws the plots in place, keeping the cursor and the zoom the user set. */
+function updateTraceCharts(data) {
+  const useLog = traceUsesLog(data);
+  if (!trace.charts.length || useLog !== trace.drawnAsLog) {
+    trace.drawnAsLog = useLog;
+    buildTraceCharts(data);
+    return;
+  }
+
+  const columns = traceColumns(data);
+  trace.charts[0].setData(columns.latency);
+  trace.charts[1].setData(columns.jitter);
+  trace.charts[2].setData(columns.loss);
+}
+
+function destroyTraceCharts() {
+  if (!trace) return;
+  trace.resize?.disconnect();
+  trace.resize = null;
+  for (const chart of trace.charts || []) {
+    chart.destroy();
+  }
+  trace.charts = [];
+}
+
+/**
+ * Draws the line a reading has to cross to be reported as a peak, so the chart and
+ * the list underneath it visibly agree about what counts.
+ */
+function thresholdLine(value, colour) {
+  return {
+    hooks: {
+      draw: (u) => {
+        if (!value) return;
+        const y = u.valToPos(value, 'y', true);
+        if (!Number.isFinite(y)) return;
+        const { ctx } = u;
+        ctx.save();
+        ctx.strokeStyle = colour;
+        ctx.globalAlpha = 0.65;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(u.bbox.left, y);
+        ctx.lineTo(u.bbox.left + u.bbox.width, y);
+        ctx.stroke();
+        ctx.restore();
+      },
+    },
+  };
+}
+
+/**
+ * Reports what every series was doing at the instant under the cursor.
+ *
+ * One readout for all three charts rather than a legend under each: the question is
+ * "what happened at this moment", and the answer is latency, jitter and loss together.
+ */
+function showTraceCursor(u) {
+  const readout = document.getElementById('trace-hover');
+  if (!readout || !trace?.data) return;
+
+  const index = u.cursor.idx;
+  if (index === null || index === undefined) {
+    readout.innerHTML = '&nbsp;';
+    return;
+  }
+
+  const sample = trace.data.samples[index];
+  if (!sample) return;
+
+  const when = `<strong>${new Date(sample.t * 1000).toLocaleTimeString()}</strong>`;
+
+  // Nothing was measured here, which is not the same as a clean reading and should
+  // not be dressed up as a row of dashes.
+  if (!sample.sent) {
+    readout.innerHTML = `${when} &middot; not recorded`;
+    return;
+  }
+
+  readout.innerHTML = [
+    when,
+    `${formatMs(sample.avg)} typical`,
+    sample.max !== null && sample.max !== sample.avg ? `${formatMs(sample.max)} slowest` : null,
+    `${formatMs(sample.jitterMax)} jitter`,
+    sample.lost ? `<span class="hot">${sample.lost}/${sample.sent} lost</span>` : `${sample.sent} sent`,
+  ].filter(Boolean).join(' &middot; ');
+}
+
+function withAlpha(colour, alpha) {
+  const hex = colour.replace('#', '');
+  const full = hex.length === 3 ? [...hex].map((c) => c + c).join('') : hex;
+  const n = parseInt(full, 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
+}
+
+/** Axis labels: short enough to fit, and in seconds once milliseconds get silly. */
+function formatAxisMs(value) {
+  if (value === null) return '';
+  if (value >= 1000) return `${value / 1000}s`;
+  if (value >= 10) return String(Math.round(value));
+  if (value >= 1) return value.toFixed(1);
+  return value.toFixed(2);
 }
 
 /** Describes the window on screen, since it is not always one of the range buttons. */
@@ -566,68 +739,21 @@ function describeWindow(data) {
   return `${Math.round(span / 3600)}h`;
 }
 
-/**
- * Draws a series as a line that stops at gaps rather than running through them: a
- * straight line across an outage would claim measurements that were never taken.
- */
-function brokenLine(samples, pick, x, y, className) {
-  const parts = [];
-  let run = [];
-  const flush = () => {
-    if (run.length > 1) {
-      parts.push(`<polyline points="${run.join(' ')}" class="${className}"/>`);
-    } else if (run.length === 1) {
-      const [px, py] = run[0].split(',');
-      parts.push(`<circle cx="${px}" cy="${py}" r="1.1" class="${className}-dot"/>`);
-    }
-    run = [];
-  };
-
-  for (const s of samples) {
-    const value = pick(s);
-    if (value === null || value === undefined) {
-      flush();
-      continue;
-    }
-    run.push(`${x(s.t).toFixed(1)},${y(value).toFixed(1)}`);
-  }
-  flush();
-  return parts;
-}
-
-function axisTicks(floor, top, useLog) {
-  if (useLog) {
-    const ticks = [];
-    for (let power = Math.floor(Math.log10(Math.max(floor, 0.1))); Math.pow(10, power) <= top; power++) {
-      const value = Math.pow(10, power);
-      if (value >= floor) ticks.push(value);
-    }
-    return ticks.length > 1 ? ticks : [floor, top];
-  }
-  return [0.25, 0.5, 0.75, 1].map((f) => top * f);
-}
-
-function formatTick(value) {
-  if (value >= 1000) return `${(value / 1000).toFixed(0)}s`;
-  if (value >= 10) return `${value.toFixed(0)}`;
-  return `${value.toFixed(1)}`;
-}
-
-function timeTicks(from, to) {
-  const count = 6;
-  const ticks = [];
-  for (let i = 0; i <= count; i++) {
-    ticks.push(from + Math.round(((to - from) * i) / count));
-  }
-  return ticks;
-}
-
-function formatClock(seconds, span) {
-  const date = new Date(seconds * 1000);
-  const options = span <= 1800
-    ? { hour: '2-digit', minute: '2-digit', second: '2-digit' }
-    : { hour: '2-digit', minute: '2-digit' };
-  return date.toLocaleTimeString([], options);
+/** The window summary, shown whenever the cursor is not over the plots. */
+function renderTraceSummary(data) {
+  const s = data.summary;
+  document.getElementById('trace-readout').innerHTML = [
+    `<strong>${s.eventCount}</strong> peak${s.eventCount === 1 ? '' : 's'} in ${describeWindow(data)}`,
+    `median ${formatMs(s.medianMs)}`,
+    `95th ${formatMs(s.p95Ms)}`,
+    `worst ${formatMs(s.maxMs)}`,
+    `jitter ${formatMs(s.medianJitterMs)} / ${formatMs(s.maxJitterMs)} worst`,
+    `loss ${s.lossPercent === null ? '-' : s.lossPercent.toFixed(2)}% of ${s.sent}`,
+    `above ${formatMs(data.thresholds.roundTripMs)} counts`,
+    // Said out loud when it is not one second, because at summary resolution a
+    // two-second stall is reported as the whole slot that contained it.
+    ...(data.resolutionSeconds > 1 ? [`summarised ${data.resolutionSeconds}s at a time`] : []),
+  ].join(' &middot; ');
 }
 
 /** The peak list: the moments worth looking at, with a way to look at them. */

@@ -88,6 +88,18 @@ Two things keep the peaks visible rather than smoothing them away:
   link normally behaves, so 60 ms is reported on a 5 ms LAN and ignored on a 55 ms
   transatlantic hop. A fixed limit has to be wrong about one of them.
 
+The panel is drawn with [uPlot](https://github.com/leeoniya/uPlot): drag across any of
+the three plots to zoom — which refetches that window, so zooming into two minutes of
+a day-long view returns the seconds themselves rather than magnifying the summary that
+replaced them — and a crosshair synced across latency, jitter and loss reads out what
+all three were doing at whatever instant you point at.
+
+uPlot is bundled, not loaded from a CDN. This is a page you open *because* the network
+is misbehaving, and a chart that has to fetch itself from someone else's server is
+blank in exactly the situation it exists for; it also keeps isolated networks working
+and "unzip and run" true. A test fails the build if a remote script or stylesheet ever
+appears in the page.
+
 A traced target costs one probe a second and about 4.5 MB, fixed — a day at full
 resolution and a month of summarised peaks. Set `"trace": false` on a target to leave
 it out, or `"trace": { "enabled": false }` to record nothing at all.
@@ -303,3 +315,12 @@ are all written here, because reproducing SmokePing exactly is the point of them
 GPL-2.0-or-later, matching upstream SmokePing, whose data model and graph design this
 implementation deliberately follows. SmokePing is copyright Tobias Oetiker; this is an
 independent reimplementation in C# and shares none of its code.
+
+Bundled third-party code:
+
+| | | |
+| --- | --- | --- |
+| [uPlot](https://github.com/leeoniya/uPlot) 1.6.32 | MIT | charts in the trace panel, at `wwwroot/vendor/uplot` |
+
+Everything else it depends on is a NuGet package restored at build time — Serilog,
+DnsClient and the Microsoft hosting libraries — listed in `SmokePing.Net.csproj`.

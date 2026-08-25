@@ -192,22 +192,34 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; }
 }
 
 /* The trace panel: recorded history at one probe a second. */
-.trace-chart {
-  width: 100%;
-  height: auto;
+.trace-plots {
   background: var(--panel-alt);
   border: 1px solid var(--border);
   border-radius: 6px;
+  padding: 6px 4px 2px;
+  overflow: hidden;
 }
 
 .trace-readout {
   color: var(--muted);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
-  margin: 0 0 8px;
+  margin: 0 0 2px;
 }
 
 .trace-readout strong { color: var(--text); }
+
+/* What is under the crosshair. Its own line, kept at a fixed height, so the panel
+   does not jump every time the pointer enters and leaves the plots. */
+.trace-hover {
+  color: var(--text);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  margin: 0 0 8px;
+  min-height: 18px;
+}
+
+.trace-hover .hot { color: var(--danger); }
 
 .trace-note {
   color: var(--muted);
@@ -230,17 +242,11 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .trace-ranges button.active { border-color: var(--accent); color: var(--accent); }
 #trace-scale { margin-left: 8px; color: var(--muted); min-width: 52px; }
 
-.trace-grid { stroke: var(--border); stroke-width: 1; }
-.trace-threshold { stroke: var(--danger); stroke-width: 1; stroke-dasharray: 4 4; opacity: 0.6; }
-.trace-label { fill: var(--muted); font-size: 10px; font-family: inherit; }
-
-/* The spread within a column, drawn behind the mean it summarises. */
-.trace-envelope { fill: var(--accent); fill-opacity: 0.22; stroke: none; }
-.trace-line { fill: none; stroke: var(--accent); stroke-width: 1.3; }
-.trace-line-dot { fill: var(--accent); }
-.trace-jitter { fill: none; stroke: #c58af9; stroke-width: 1.1; }
-.trace-jitter-dot { fill: #c58af9; }
-.trace-loss { fill: var(--danger); }
+/* uPlot ships a light theme; these are the parts it does not take from options. */
+.u-select { background: rgba(77, 163, 255, 0.18); }
+.u-cursor-x { border-color: var(--muted); }
+.trace-plots .u-label { color: var(--muted); font-size: 11px; }
+.trace-plots .u-cursor-pt { display: none; }
 
 .trace-events { margin-top: 12px; }
 .trace-empty { color: var(--muted); font-size: 13px; margin: 6px 0 0; }
