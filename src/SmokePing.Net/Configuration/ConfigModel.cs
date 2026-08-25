@@ -13,6 +13,9 @@ public sealed class SmokePingConfig
     /// <summary>Storage settings, taken from the Database section of a native configuration.</summary>
     public DatabaseConfig Database { get; set; } = new();
 
+    /// <summary>Settings for the live, once-a-second view.</summary>
+    public LiveConfig Live { get; set; } = new();
+
     /// <summary>The target hierarchy. Nodes without a host act as menu folders.</summary>
     public List<TargetNode> Targets { get; set; } = [];
 
@@ -43,6 +46,22 @@ public sealed class DatabaseConfig
     /// default archive table.
     /// </summary>
     public List<ArchiveConfig> Archives { get; set; } = [];
+}
+
+/// <summary>Settings for the live, once-a-second view.</summary>
+public sealed class LiveConfig
+{
+    /// <summary>
+    /// Whether the live view may be started at all. It probes far harder than the
+    /// normal schedule, so an installation that does not want that can refuse it.
+    /// </summary>
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>Interval used when a request does not ask for one.</summary>
+    public int IntervalMs { get; set; } = 1000;
+
+    /// <summary>Floor on the requested interval, so nobody can ask for a flood.</summary>
+    public int MinimumIntervalMs { get; set; } = 200;
 }
 
 public sealed class GeneralConfig

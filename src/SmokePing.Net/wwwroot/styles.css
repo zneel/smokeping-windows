@@ -190,3 +190,28 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; }
   .sidebar { width: 100%; flex: none; height: auto; position: static; border-right: none; border-bottom: 1px solid var(--border); }
   .topbar { flex-wrap: wrap; gap: 10px; }
 }
+
+/* The live view: a strip chart that redraws once a second. */
+.live-chart {
+  width: 100%;
+  height: 160px;
+  background: var(--panel-alt);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.live-readout {
+  float: right;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.live-note {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 8px 0 0;
+}
+
+#live-toggle { margin-left: 8px; }
+#live-toggle.running { border-color: var(--danger); color: var(--danger); }

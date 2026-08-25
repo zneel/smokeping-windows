@@ -41,6 +41,7 @@ public static class ServiceRegistration
         services.AddSingleton(new AlertEngine(config.Alerts));
         services.AddSingleton<AlertNotifier>();
         services.AddSingleton<HostResolver>();
+        services.AddSingleton<LiveProbeService>();
 
         // Named clients rather than AddHttpClient<T>, which would re-register the
         // service type itself as transient and undo the singletons above. Separate

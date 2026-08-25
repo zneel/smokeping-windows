@@ -17,6 +17,12 @@ const state = {
 const OVERVIEW_RANGE = '10h';
 const REFRESH_MS = 60000;
 
+/** How many seconds of live trace stay on screen. */
+const LIVE_WINDOW = 180;
+
+/** The open live stream, if any. Only one runs at a time. */
+let live = null;
+
 /** Minutes east of UTC, so the server can label the time axis in local time. */
 function utcOffsetMinutes() {
   return -new Date().getTimezoneOffset();
@@ -195,11 +201,26 @@ async function renderTarget(id) {
       <li><span>packet loss</span>${s.lossAverage.toFixed(2)}%</li>
       <li><span>rounds with data</span>${s.roundsWithData}</li>
     </ul>
+    ${state.config.live && state.config.live.enabled ? `
+      <div class="card">
+        <h3>Live
+          <button id="live-toggle" type="button">Start</button>
+          <span id="live-readout" class="live-readout"></span>
+        </h3>
+        <svg id="live-chart" class="live-chart" viewBox="0 0 900 160" preserveAspectRatio="none"></svg>
+        <p class="live-note">One probe a second, shown as it happens. Not recorded &mdash; the
+          stored graphs above keep their own schedule.</p>
+      </div>` : ''}
     ${state.config.detailRanges.map((r) => `
       <div class="card">
         <h3>${escapeHtml(r.label)}</h3>
         <div class="graph" data-range="${r.range}"></div>
       </div>`).join('')}`;
+
+  const toggle = document.getElementById('live-toggle');
+  if (toggle) {
+    toggle.addEventListener('click', () => (live ? stopLive() : startLive(id)));
+  }
 
   for (const container of content.querySelectorAll('.graph')) {
     loadGraph(container, id, container.dataset.range, {
@@ -303,9 +324,127 @@ async function updateAlertBadge() {
   }
 }
 
+/* ------------------------------------------------------------------- live */
+
+/**
+ * Opens the live stream for a target and draws it as it arrives.
+ *
+ * The server sends one probe per second over server-sent events; this keeps the last
+ * few minutes and redraws a strip chart on each sample. Nothing here is stored, and
+ * closing the view stops the probing.
+ */
+function startLive(id) {
+  stopLive();
+
+  const samples = [];
+  const source = new EventSource(`/api/live/${id}`);
+  live = { source, samples };
+
+  const toggle = document.getElementById('live-toggle');
+  if (toggle) {
+    toggle.textContent = 'Stop';
+    toggle.classList.add('running');
+  }
+
+  source.addEventListener('error', (event) => {
+    // A stream the server refused carries a message; a dropped connection does not,
+    // and EventSource retries that on its own.
+    if (event.data) {
+      setLiveReadout(`stopped: ${event.data}`);
+      stopLive();
+    }
+  });
+
+  source.onmessage = (event) => {
+    samples.push(JSON.parse(event.data));
+    while (samples.length > LIVE_WINDOW) {
+      samples.shift();
+    }
+
+    drawLive(samples);
+  };
+}
+
+function stopLive() {
+  if (!live) return;
+  live.source.close();
+  live = null;
+
+  const toggle = document.getElementById('live-toggle');
+  if (toggle) {
+    toggle.textContent = 'Start';
+    toggle.classList.remove('running');
+  }
+}
+
+function setLiveReadout(text) {
+  const readout = document.getElementById('live-readout');
+  if (readout) readout.textContent = text;
+}
+
+function isLost(sample) {
+  return sample.rtt === null || sample.rtt === undefined;
+}
+
+/** Draws the live trace: a line for the round trip time, marks where a probe was lost. */
+function drawLive(samples) {
+  const chart = document.getElementById('live-chart');
+  if (!chart) return;
+
+  const width = 900;
+  const height = 160;
+  const answered = samples.filter((s) => !isLost(s));
+  const lost = samples.length - answered.length;
+
+  // Scale to the slowest answer with headroom, so the trace fills the strip.
+  const peak = answered.length ? Math.max(...answered.map((s) => s.rtt)) : 1;
+  const top = (peak * 1.2) || 1;
+  // Newest at the right edge, so the trace scrolls in the way a live monitor does
+  // rather than filling from the left while the window is still short.
+  const step = width / LIVE_WINDOW;
+  const x = (i) => width - ((samples.length - 1 - i) * step);
+  const y = (v) => height - (Math.min(v / top, 1) * (height - 12));
+
+  const parts = [];
+
+  samples.forEach((s, i) => {
+    if (isLost(s)) {
+      parts.push(`<rect x="${x(i).toFixed(1)}" y="0" width="${Math.max(step, 1).toFixed(1)}" height="${height}" fill="#ff5d5d" fill-opacity="0.28"/>`);
+    }
+  });
+
+  // Break the line at losses rather than drawing straight through them.
+  let run = [];
+  const flush = () => {
+    if (run.length > 1) {
+      parts.push(`<polyline points="${run.join(' ')}" fill="none" stroke="#26ff00" stroke-width="1.6"/>`);
+    }
+    run = [];
+  };
+
+  samples.forEach((s, i) => {
+    if (isLost(s)) {
+      flush();
+      return;
+    }
+    run.push(`${x(i).toFixed(1)},${y(s.rtt).toFixed(1)}`);
+  });
+  flush();
+
+  chart.innerHTML = parts.join('');
+
+  const latest = samples[samples.length - 1];
+  const current = latest && !isLost(latest) ? formatMs(latest.rtt) : 'lost';
+  const sorted = answered.map((s) => s.rtt).sort((a, b) => a - b);
+  const median = sorted.length ? formatMs(sorted[Math.floor(sorted.length / 2)]) : '-';
+
+  setLiveReadout(`${current} now  \u00b7  ${median} median  \u00b7  ${formatMs(peak)} peak  \u00b7  ${lost}/${samples.length} lost`);
+}
+
 /* ------------------------------------------------------------------ shell */
 
 async function render() {
+  stopLive();
   state.route = parseRoute();
   highlightNav();
   renderMenu();

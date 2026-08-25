@@ -61,6 +61,20 @@ the loss colour key, and what took the measurements.
 That combination is the whole point of SmokePing: latency, jitter and loss in one
 picture, at a glance.
 
+### Live view
+
+A target's page has a **Live** panel: one probe a second, drawn as it arrives.
+
+It is for the moment you are changing something and want to see the effect now, rather
+than in five minutes. Nothing it measures is recorded — the archives are built on a
+fixed step, and a per-second sample has nowhere to go in them without either
+misaligning the buckets or shortening the step until the retention collapses to hours.
+So the trace lives in memory for as long as somebody is watching.
+
+Two people watching the same target share one stream rather than doubling the probing,
+and it stops the moment the last one closes the page. Turn it off entirely with
+`"live": { "enabled": false }`.
+
 ### Jitter
 
 Alongside the original's figures, each round also records **jitter**: the mean

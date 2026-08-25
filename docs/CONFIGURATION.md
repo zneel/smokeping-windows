@@ -201,6 +201,36 @@ Each round stores the number of probes sent and lost, eleven quantiles of the
 round-trip times, and the jitter. Changing `step` or `pings` changes the record
 layout, so the previous database is renamed to `*.bak` and a fresh one started.
 
+## `live`
+
+The once-a-second view offered on each target's page.
+
+```jsonc
+"live": {
+  "enabled": true,        // whether it may be started at all
+  "intervalMs": 1000,     // used when a request does not ask for one
+  "minimumIntervalMs": 200 // floor, so nobody can ask for a flood
+}
+```
+
+At one probe a second a target is measured three hundred times as often as on the
+default five minute step, so it is worth knowing what limits apply. A session runs only
+while somebody is watching and stops when the last watcher leaves. Watchers of the same
+target share one session rather than each starting their own. At most twenty sessions
+run at once; the twenty-first is refused with a message rather than being queued.
+
+Live measurements are never written to the database. The archives are built on a fixed
+step and a per-second sample has nowhere to go in them.
+
+The stream is server-sent events, so it can be consumed outside the browser too:
+
+```
+curl -N http://localhost:8081/api/live/internet/cloudflare
+data: {"t":1787641746132,"rtt":0.2522}
+```
+
+`?intervalMs=` overrides the interval, clamped between `minimumIntervalMs` and 60000.
+
 ## `alerts`
 
 | Key | Default | Meaning |

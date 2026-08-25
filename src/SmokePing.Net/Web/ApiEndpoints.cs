@@ -6,7 +6,9 @@ using Microsoft.AspNetCore.Routing;
 using SmokePing.Net.Alerting;
 using SmokePing.Net.Configuration;
 using SmokePing.Net.Graphing;
+using System.Text.Json;
 using SmokePing.Net.Probes;
+using SmokePing.Net.Services;
 using SmokePing.Net.Rrd;
 using SmokePing.Net.Storage;
 
@@ -34,6 +36,12 @@ public static partial class ApiEndpoints
             owner = config.Raw.General.Owner,
             contactEmail = config.Raw.General.ContactEmail,
             detailRanges = DetailRanges.Select(r => new { label = r.Label, range = r.Range }),
+            live = new
+            {
+                enabled = config.Raw.Live.Enabled,
+                intervalMs = config.Raw.Live.IntervalMs,
+                minimumIntervalMs = config.Raw.Live.MinimumIntervalMs,
+            },
             menu = config.Menu,
             targetCount = config.Targets.Count,
         }));
@@ -223,11 +231,69 @@ public static partial class ApiEndpoints
             });
         });
 
-        app.MapGet("/api/health", (LoadedConfiguration config, MeasurementStore store) => Results.Ok(new
+        // Server-sent events rather than a socket: the stream is one-way, it is a
+        // handful of numbers a second, and EventSource reconnects on its own.
+        app.MapGet("/api/live/{*id}", async (
+            string id,
+            int? intervalMs,
+            HttpContext context,
+            LoadedConfiguration config,
+            LiveProbeService live,
+            CancellationToken cancellationToken) =>
+        {
+            if (!config.Raw.Live.Enabled)
+            {
+                return Results.StatusCode(StatusCodes.Status403Forbidden);
+            }
+
+            if (!config.TryGetTarget(id, out var target))
+            {
+                return Results.NotFound(new { error = $"Unknown target '{id}'." });
+            }
+
+            var interval = Math.Clamp(
+                intervalMs ?? config.Raw.Live.IntervalMs,
+                config.Raw.Live.MinimumIntervalMs,
+                60_000);
+
+            context.Response.Headers.ContentType = "text/event-stream";
+            context.Response.Headers.CacheControl = "no-cache";
+            context.Response.Headers["X-Accel-Buffering"] = "no";
+
+            try
+            {
+                await foreach (var sample in live.WatchAsync(target, interval, cancellationToken))
+                {
+                    var payload = JsonSerializer.Serialize(new
+                    {
+                        t = sample.Timestamp,
+                        rtt = sample.RoundTripMilliseconds,
+                    });
+
+                    await context.Response.WriteAsync($"data: {payload}\n\n", cancellationToken);
+                    await context.Response.Body.FlushAsync(cancellationToken);
+                }
+            }
+            catch (InvalidOperationException ex)
+            {
+                // Too many sessions; say so in the stream rather than dropping it.
+                await context.Response.WriteAsync($"event: error\ndata: {JsonSerializer.Serialize(ex.Message)}\n\n", CancellationToken.None);
+            }
+            catch (OperationCanceledException)
+            {
+                // The browser navigated away, which is how a live view ends.
+            }
+
+            return Results.Empty;
+        });
+
+        app.MapGet("/api/health", (LoadedConfiguration config, MeasurementStore store, LiveProbeService live) => Results.Ok(new
         {
             status = "ok",
             targets = config.Targets.Count,
             storageFormat = store.Format,
+            liveEnabled = config.Raw.Live.Enabled,
+            liveSessions = live.ActiveSessions,
             dataDirectory = store.DataDirectory,
             utcNow = DateTimeOffset.UtcNow,
         }));
